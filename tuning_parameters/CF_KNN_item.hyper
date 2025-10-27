@@ -1,0 +1,4 @@
+model: ItemKNN
+
+k uniform 1,500
+shrink uniform 0.1,5

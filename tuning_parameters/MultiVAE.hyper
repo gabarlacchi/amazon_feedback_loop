@@ -1,0 +1,3 @@
+model: MultiVAE
+
+learning_rate loguniform -8,-1

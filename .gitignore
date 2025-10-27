@@ -1,0 +1,37 @@
+# Packages #
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# OS generated files #
+.DS_Store
+.DS_Store?
+._*
+
+# Cache, log, original data
+cache/
+cache_plot/
+data/
+log/
+log_*/
+
+# Recbole folder
+models_tmp/
+
+# POst process folder
+outcomes_analysis/
+
+__pycache__/
+
+# All the results
+results_*/
+
+*.json
+
+
+

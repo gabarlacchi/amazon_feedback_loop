@@ -1,0 +1,6 @@
+learning_rate:0.061011152877532525, n_layers:2.7079784868171553, reg_weight:0.1958162854268366
+Valid result:
+precision@10 : 0.0922    recall@10 : 0.1837    hit@10 : 0.5905    ndcg@10 : 0.1889    itemcoverage@10 : 0.0152    mrr@10 : 0.3624    map@10 : 0.1122    averagepopularity@10 : 441.9784
+Test result:
+precision@10 : 0.093    recall@10 : 0.2034    hit@10 : 0.6069    ndcg@10 : 0.1952    itemcoverage@10 : 0.0159    mrr@10 : 0.3557    map@10 : 0.1163    averagepopularity@10 : 426.9279
+

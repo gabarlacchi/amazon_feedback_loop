@@ -1,0 +1,6 @@
+k:141.2704010887233, shrink:0.6317011464595155
+Valid result:
+precision@10 : 0.1296    recall@10 : 0.1764    hit@10 : 0.4955    ndcg@10 : 0.1886    itemcoverage@10 : 0.6674    mrr@10 : 0.2898    map@10 : 0.1212    averagepopularity@10 : 144.2365
+Test result:
+precision@10 : 0.1454    recall@10 : 0.2114    hit@10 : 0.5391    ndcg@10 : 0.2245    itemcoverage@10 : 0.579    mrr@10 : 0.3362    map@10 : 0.1525    averagepopularity@10 : 148.7757
+

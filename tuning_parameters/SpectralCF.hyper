@@ -1,0 +1,5 @@
+model: SpectralCF
+
+learning_rate loguniform -8,-1
+reg_weight choice [0.01,0.002,0.001,0.0005]
+n_layers choice [1,2,3,4] 

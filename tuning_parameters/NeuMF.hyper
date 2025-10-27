@@ -1,0 +1,5 @@
+model: NeuMF
+
+learning_rate loguniform -8,-1
+dropout_prob choice [0.0,0.1,0.2,0.3,0.4,0.5]
+mlp_hidden_size choice ['[64,32,16]','[32,16,8]']

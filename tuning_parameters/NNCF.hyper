@@ -1,0 +1,6 @@
+model: NNCF
+
+learning_rate loguniform -8,-1
+neigh_embedding_size choice [64,32]
+mlp_hidden_size choice ['[128,64,32,16]','[64,32,16,8]']
+num_conv_kernel choice [128,64]
