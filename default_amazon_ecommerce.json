@@ -1,0 +1,32 @@
+{
+    "dataset": "amazon_e_commerce",
+    "recbole_folder": "models_tmp",
+    "frequent_costumers": true,
+    "random_sample_users": false,
+    "time_window": "2018-2022",
+    "experiment_mode": "p-validation",
+    "n_reps": 3,
+    "use_cache": true,
+    "recommender_model": {
+        "model_name": "SpectralCF",
+        "epochs": 10,
+        "learning_rate": 0.0045,
+        "n_layers": 3,
+        "reg_weight": 0.0005
+    },
+    "user_strategy": {
+        "model_name": "Custom choice model",
+        "epochs": 1,
+        "tau": null,
+        "candidate_set": {
+            "size": 50,
+            "p_global": 0.40,
+            "p_user": 0.40,
+            "p_random": 0.20
+        }
+    },
+    "k_items": 20,
+    "cold_start_months": 6,
+    "epochs": 24,
+    "delta_training_epoch": 1
+}
