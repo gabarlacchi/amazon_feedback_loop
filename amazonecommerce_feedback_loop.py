@@ -137,6 +137,8 @@ class AmazonECommerceFeedbackLoop():
         # If use_cahe=False or no cache files exist, these functions will take time
         self.initialization_dataset.real_dataset_save_cache(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
         self.experiment_distribution_dict = self.initialization_dataset.strategy_simulation_info(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
+
+        exit()        
     def init_recbole_dataset(self) -> None:
         working_df = self.dataset_unrolled_cold_start.copy()
         working_df['date'] = pd.to_datetime(working_df['date'], format="%Y-%m-%d")
@@ -269,7 +271,7 @@ class AmazonECommerceFeedbackLoop():
             self.logger.info(self.train_data)
         except Exception as e:
             raise Exception(f"Error during the initialization of the dataset -> {e}")
-
+        
         if self.model_name_config == "Individual Random":
             self.recbole_model = IndividualRandom(self.model_config, self.recbole_dataset).to(self.model_config['device'])
         elif self.model_name_config == "Collective Random":
