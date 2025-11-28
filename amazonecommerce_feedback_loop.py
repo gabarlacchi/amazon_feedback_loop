@@ -53,6 +53,10 @@ class AmazonECommerceFeedbackLoop():
             "epoch_index": 0,
         }
 
+        self.train_window_months = int(getattr(self.config, "fixed_window_size", 6))
+        # Every epoch: move the window size or consider from the start moving last month?
+        self.use_all_data = bool(getattr(self.config, "use_all_from_start", True))
+
         self.unrolled_dataset_path = initialization_dataset.unrolled_dataset_total_path
         self.distribution_timeline_path = initialization_dataset.distribution_timeline_path
 
@@ -99,6 +103,7 @@ class AmazonECommerceFeedbackLoop():
         if hasattr(self, "parameter_dict"):
             self.parameter_dict["seed"] = int(ss.generate_state(1, dtype=np.uint32)[0])
             self.parameter_dict["reproducibility"] = True
+    
     def init_experiment(self) -> None:
         df_dataset_total = self.initialization_dataset.unrolled_dataset_total
         df_dataset_total['date'] = pd.to_datetime(df_dataset_total['date'], format="%Y-%m-%d")
@@ -138,7 +143,196 @@ class AmazonECommerceFeedbackLoop():
         self.initialization_dataset.real_dataset_save_cache(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
         self.experiment_distribution_dict = self.initialization_dataset.strategy_simulation_info(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
 
-        exit()        
+    # HELPER FUNCTIONS
+
+    @staticmethod
+    def _to_bool01(series, true_vals=["yes", "Yes", "y", "Y", "1"], false_vals=["no", "No", "n", "N", "0"]):
+        s = series.astype(str).str.strip().str.lower()
+        arr = np.where(
+            s.isin(true_vals), 1.0,
+            np.where(s.isin(false_vals), 0.0, np.nan)
+        )
+        return pd.Series(arr, index=series.index, dtype="float")
+    
+    @staticmethod
+    def _ensure_numeric(series, fill=0.0):
+
+        return pd.to_numeric(series, errors="coerce").fillna(fill).round(2)
+    
+    @staticmethod
+    def _simple_tokenize(text, max_len=16):
+        if pd.isna(text):
+            return ""
+        return " ".join(str(text).strip().lower().split()[:max_len])
+
+    @staticmethod
+    def _rome_midnight_and_epoch(dt_series):
+        dt = pd.to_datetime(dt_series, utc=True, errors="coerce").dt.tz_convert("Europe/Rome").dt.normalize()
+        ts = (dt.astype("int64") // 10**9).astype(float)
+
+        return dt, ts
+
+    @staticmethod
+    def _unroll_by_interaction_count(df: pd.DataFrame):
+        if "interaction_count:float" not in df.columns:
+            return df.copy()
+
+        cnt = (
+            pd.to_numeric(df["interaction_count:float"], errors="coerce")
+            .fillna(1)
+            .astype(int)
+            .clip(lower=1)
+        )
+        idx = np.repeat(np.arange(len(df)), cnt.to_numpy())
+        unrolled = df.iloc[idx].copy()
+        unrolled["interaction_count:float"] = 1.0
+
+        return unrolled
+
+    # def init_recbole_dataset(self) -> None:
+    #     df = self.dataset_unrolled_cold_start.copy()
+    #     # Features pre-processing
+    #     df["age"] = df.get("age").map(self._simple_tokenize).fillna("")
+    #     df["race"] = df.get("race").map(self._simple_tokenize).fillna("")
+    #     df["education"] = df.get("education").map(self._simple_tokenize).fillna("")
+    #     df["income"] = df.get("income").map(self._simple_tokenize).fillna("")
+    #     df["gender"] = df.get("gender").astype(str).str.strip().str.title()
+    #     df.loc[~df["gender"].isin(["Male", "Female", "Other"]), "gender"] = "Other"
+    #     df["how_often_use_amazon"] = df.get("how_often_use_amazon").map(self._simple_tokenize).fillna("")
+    #     df["smoke_cigarettes"] = self._to_bool01(df.get("smoke_cigarettes")).fillna(0)
+    #     df["has_diabet"] = self._to_bool01(df.get("has_diabet")).fillna(0)
+        
+    #     df["category"] = df.get("category").map(self._simple_tokenize).fillna("")
+    #     df["title"] = df.get("Title").map(self._simple_tokenize).fillna("")
+
+    #     df = df.loc[df["user_id"].isin(self.users_ids)
+    #                 & df["item_id"].isin(self.items_ids)].copy()
+
+    #     base_time_col = "timestamp" if "timestamp" in df.columns else "date"
+    #     df["__rome_date"], _ = self._rome_midnight_and_epoch(df[base_time_col])
+
+    #     # User features
+    #     user_feats = (
+    #         df.sort_values("__rome_date")
+    #           .drop_duplicates("user_id", keep="last")
+    #           .loc[:, ["user_id", "age", "race", "education", "income", "gender",
+    #                    "how_often_use_amazon", "smoke_cigarettes", "has_diabet"]]
+    #     )
+    #     user_feats = user_feats[user_feats["user_id"].isin(self.users_ids)]
+
+    #     user_df = user_feats.rename(columns={
+    #         "user_id": "user_id:token",
+    #         "age": "age:token",
+    #         "race": "race:token",
+    #         "education": "education:token",
+    #         "income": "income:token",
+    #         "gender": "gender:token",
+    #         "how_often_use_amazon": "how_often_use_amazon:token",
+    #         "smoke_cigarettes": "smoke_cigarettes:float",
+    #         "has_diabet": "has_diabet:float",
+    #     })
+
+    #     # Item features
+    #     item_feats = (
+    #         df.sort_values("__rome_date")
+    #           .drop_duplicates("item_id", keep="last")
+    #           .loc[:, ["item_id", "category", "title"]]
+    #     )
+    #     item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
+
+    #     item_df = item_feats.rename(columns={
+    #         "item_id": "item_id:token",
+    #         "category": "category:token",
+    #         "title": "title:token_seq", 
+    #     })
+
+    #     user_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), index=False, sep='\t') 
+    #     item_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.item"), index=False, sep='\t') 
+
+    #     working_df = self.dataset_unrolled_cold_start.copy()
+
+    #     train_len = self.train_window_months
+
+    #     working_df["date"] = pd.to_datetime(working_df["date"], utc=True)
+    #     # To avoid some outlier errors
+    #     working_df["date"] = working_df["date"].dt.tz_convert("Europe/Rome").dt.normalize()
+
+    #     working_df["timestamp"] = (working_df["date"].astype("int64") // 10**9).astype(float)
+    #     working_df["month"] = working_df["date"].dt.to_period("M")
+
+    #     months = np.sort(working_df["month"].unique())
+        
+    #     train_start_idx = 0
+    #     train_end_idx = train_len - 3
+    #     val_idx  = train_end_idx + 1
+    #     test_idx = train_end_idx + 2
+
+    #     train_start = months[train_start_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+    #     train_end = months[train_end_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+    #     val_start = months[val_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+    #     val_end = months[val_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+    #     test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+    #     test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+
+    #     working_df["price_per_unit"] = self._ensure_numeric(working_df.get("price_per_unit"))
+
+    #     grouped = (
+    #         working_df
+    #         .groupby(["user_id", "item_id", "timestamp"], as_index=False)
+    #         .agg(
+    #             interaction_count=("item_id", "size"),
+    #             price_per_unit=("price_per_unit", "mean"),
+    #             date=("date", "first"),
+    #         )
+    #     )
+    #     grouped["label"] = 1.0  # ! Use binary implicit positives !
+
+    #     # Masks
+    #     train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
+    #     val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
+    #     test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
+
+    #     # Headers
+    #     cols = [
+    #         "user_id:token", "item_id:token", "timestamp:float",
+    #         "label:float", "price_per_unit:float", "interaction_count:float", "date"
+    #     ]
+    #     grouped = grouped.rename(columns={
+    #         "user_id": "user_id:token",
+    #         "item_id": "item_id:token",
+    #         "timestamp": "timestamp:float",
+    #         "label": "label:float",
+    #         "price_per_unit": "price_per_unit:float",
+    #         "interaction_count": "interaction_count:float",
+    #     })
+
+    #     # Split frames
+    #     self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+    #     self.working_val_df = grouped.loc[val_mask,   cols].sort_values(["user_id:token", "timestamp:float"])
+    #     self.working_test_df = grouped.loc[test_mask,  cols].sort_values(["user_id:token", "timestamp:float"])
+
+    #     print(f"\n Train dates: {self.working_train_df.date.min()} - {self.working_train_df.date.max()} \n")
+    #     print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
+    #     print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
+
+    #     expanded_train = self._unroll_by_interaction_count(
+    #         df=self.working_train_df.drop(columns=["date"])
+    #     )
+    #     expanded_val = self._unroll_by_interaction_count(
+    #         df=self.working_val_df.drop(columns=["date"])
+    #     )
+    #     expanded_test = self._unroll_by_interaction_count(
+    #         df=self.working_test_df.drop(columns=["date"])
+    #     )
+
+    #     expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
+    #                         index=False, sep="\t")
+    #     expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
+    #                         index=False, sep="\t")
+    #     expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
+    #                         index=False, sep="\t")
+
+
     def init_recbole_dataset(self) -> None:
         working_df = self.dataset_unrolled_cold_start.copy()
         working_df['date'] = pd.to_datetime(working_df['date'], format="%Y-%m-%d")
@@ -229,7 +423,7 @@ class AmazonECommerceFeedbackLoop():
                 'split': {'LS': 'valid_and_test'},
                 'mode': 'full'
             },
-            'benchmark_filename': ['part1', 'part2', 'part3'],
+            'benchmark_filename': ['train', 'val', 'test'],
             'reproducibility': True,
             'seed': self.master_seed,
             'metrics': ["Precision", "Recall", "Hit", "NDCG", "ItemCoverage", "MRR", "MAP", "AveragePopularity"],

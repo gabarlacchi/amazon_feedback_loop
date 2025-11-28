@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from dateutil.relativedelta import relativedelta
 import traceback
+from pandas.api.types import is_datetime64_any_dtype as is_datetime
 
 from utils import DotDict
 
@@ -18,6 +19,7 @@ class AmazonECommerceDataset:
 
         self.dataset_root_path = f"./data"
         self.dataset_filename = "amazon-purchases.csv"
+        self.dataset_features_filename = "survey.csv"
 
         if not os.path.exists(os.path.join(self.dataset_root_path, self.dataset_filename)):
             raise Exception(f"\n Dataset not found -> {os.path.join(self.dataset_root_path, self.dataset_filename)} does not exists \n")
@@ -42,47 +44,121 @@ class AmazonECommerceDataset:
         self.dump_dataset = f"./cache/real_dataset_sim_amazon"
         os.makedirs(self.dump_dataset, exist_ok=True)
     
-    def setup(self) -> None:
-        # if not os.path.exists(self.unrolled_dataset_total_path):
+    def setup(self)-> None:
         if not self.config.use_cache or not os.path.exists(self.unrolled_dataset_total_path):
-            df_original = pd.read_csv(os.path.join(self.dataset_root_path, self.dataset_filename), sep=",", low_memory=False)
-            # Clean up
-            nan_columns = ['Order Date', 'Quantity', 'Shipping Address State', 'ASIN/ISBN (Product Code)', 'Category', 'Survey ResponseID']
-            df_filtered = df_original.dropna(subset=nan_columns)
-            df_filtered = df_filtered.sort_values('Order Date')
+            df_dataset = pd.read_csv(os.path.join(self.dataset_root_path, self.dataset_filename), sep=",", low_memory=False)
+            df_features = pd.read_csv(os.path.join(self.dataset_root_path, self.dataset_features_filename), sep=",", low_memory=False)
+            df_features = df_features[
+                [
+                    "Survey ResponseID",
+                    "Q-demos-state",
+                    "Q-demos-age", 
+                    "Q-demos-race", 
+                    "Q-demos-education",
+                    "Q-demos-income",
+                    "Q-demos-gender",
+                    "Q-amazon-use-how-oft",
+                    "Q-substance-use-cigarettes",
+                    "Q-personal-diabetes",
+                ]
+            ]
+            rename_dict = {
+                'Q-demos-state': 'us_origin_state',
+                'Q-demos-age': 'age',
+                'Q-demos-race': 'race',
+                'Q-demos-education': 'education',
+                'Q-demos-income': 'income',
+                'Q-demos-gender': 'gender',
+                'Q-amazon-use-how-oft': 'how_often_use_amazon',
+                'Q-substance-use-cigarettes': 'smoke_cigarettes',
+                'Q-personal-diabetes': 'has_diabet',
+                'Survey ResponseID': 'user_id'
+            }
 
-            # By default use category of the items as item_it
+            df_features = df_features.rename(columns=rename_dict)
+
+            nan_columns = ['Order Date', 'Quantity', 'Shipping Address State', 'ASIN/ISBN (Product Code)', 'Category', 'Survey ResponseID']
+            df_dataset = df_dataset.dropna(subset=nan_columns)
+
+            # Assure date format
+            if not is_datetime(df_dataset['Order Date']):
+                parsed = pd.to_datetime(df_dataset['Order Date'], errors="coerce")  # set dayfirst=True if needed
+                bad = df_dataset.loc[parsed.isna() & df_dataset['Order Date'].notna(), 'Order Date']
+                if not bad.empty:
+                    # You can inspect or fix these rows; abort instead of silently sorting wrong
+                    raise ValueError(f"{len(bad)} values in '{'Order Date'}' failed to parse, e.g.: {bad.head().tolist()}")
+                df_dataset['Order Date'] = parsed
+            
+            df_dataset = df_dataset.sort_values('Order Date', na_position="last")
+
             rename_dict = {
                 'Order Date': 'date',
                 'Purchase Price Per Unit': 'price_per_unit',
                 'Quantity': 'quantity',
                 'Shipping Address State': 'state',
-                'ASIN/ISBN (Product Code)': 'aisin',
-                'Category': 'item_id', # GROUP BY CATEGORY
+                'ASIN/ISBN (Product Code)': 'item_id',
+                'Category': 'category',
                 'Survey ResponseID': 'user_id'
             }
 
-            df_filtered = df_filtered.rename(columns=rename_dict)
+            df_dataset = df_dataset.rename(columns=rename_dict)
 
-            # Unroll to be sure about implicit feedback format
-            new_working_df = []
-            for _, row in df_filtered.iterrows():
+            unroll_df = []
+            for _, row in df_dataset.iterrows():
                 for _ in range(int(row['quantity'])):
                     new_row = row
                     new_row["quantity"] = 1
-                    new_working_df.append(new_row)
+                    unroll_df.append(new_row)
             
-            self.unrolled_dataset_total = pd.DataFrame(new_working_df, columns=df_filtered.columns)
+            df_unrolled_dataset_total = pd.DataFrame(unroll_df, columns=df_dataset.columns)
+
+            self.unrolled_dataset_total = pd.merge(df_unrolled_dataset_total, df_features, how="left", on="user_id")
+
             self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path)
 
-        elif self.config.use_cache and os.path.exists(self.unrolled_dataset_total_path):
-            self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path)
         else:
-            raise Exception(f"\n Cache not found -> {self.unrolled_dataset_total_path} \n")
+            self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path, index_col=0)
+
+    # def setup(self) -> None:
+    #     if not self.config.use_cache or not os.path.exists(self.unrolled_dataset_total_path):
+    #         df_original = pd.read_csv(os.path.join(self.dataset_root_path, self.dataset_filename), sep=",", low_memory=False)
+    #         # Clean up
+    #         nan_columns = ['Order Date', 'Quantity', 'Shipping Address State', 'ASIN/ISBN (Product Code)', 'Category', 'Survey ResponseID']
+    #         df_filtered = df_original.dropna(subset=nan_columns)
+    #         df_filtered = df_filtered.sort_values('Order Date')
+
+    #         # By default use category of the items as item_it
+    #         rename_dict = {
+    #             'Order Date': 'date',
+    #             'Purchase Price Per Unit': 'price_per_unit',
+    #             'Quantity': 'quantity',
+    #             'Shipping Address State': 'state',
+    #             'ASIN/ISBN (Product Code)': 'aisin',
+    #             'Category': 'item_id', # GROUP BY CATEGORY
+    #             'Survey ResponseID': 'user_id'
+    #         }
+
+    #         df_filtered = df_filtered.rename(columns=rename_dict)
+
+    #         # Unroll to be sure about implicit feedback format
+    #         new_working_df = []
+    #         for _, row in df_filtered.iterrows():
+    #             for _ in range(int(row['quantity'])):
+    #                 new_row = row
+    #                 new_row["quantity"] = 1
+    #                 new_working_df.append(new_row)
+            
+    #         self.unrolled_dataset_total = pd.DataFrame(new_working_df, columns=df_filtered.columns)
+    #         self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path)
+
+    #     elif self.config.use_cache and os.path.exists(self.unrolled_dataset_total_path):
+    #         self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path)
+    #     else:
+    #         raise Exception(f"\n Cache not found -> {self.unrolled_dataset_total_path} \n")
         
-        # Set up dataframe to be used for the simulation from now on
-        self.unrolled_dataset_total = self.unrolled_dataset_total[['user_id', 'item_id', 'date']]
-        self.unrolled_dataset_total['date'] = pd.to_datetime(self.unrolled_dataset_total['date'], format="%Y-%m-%d")
+    #     # Set up dataframe to be used for the simulation from now on
+    #     self.unrolled_dataset_total = self.unrolled_dataset_total[['user_id', 'item_id', 'date']]
+    #     self.unrolled_dataset_total['date'] = pd.to_datetime(self.unrolled_dataset_total['date'], format="%Y-%m-%d")
 
     def real_dataset_save_cache(self, start_date: datetime, end_date: datetime, users: list, items: list):
         """
@@ -133,6 +209,7 @@ class AmazonECommerceDataset:
                     pass
                 else:
                     raise Exception(f"\n Cache not found or not well formatted -> {self.dump_dataset} \n")
+    
     def get_trasformed_dataset(self):
         """
             App function to map ids

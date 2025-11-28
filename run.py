@@ -91,8 +91,6 @@ def main(args: argparse):
                 # A file will be output with the results
                 _ = feedback_loop_tool.tuning_hyperparameters()
 
-                exit()
-
                 if usrstrategy_model_name == "Custom choice model":
                     feedback_loop_tool.init_choice_model()
                     feedback_loop_tool.user_choice_model.results_path = choice_dir
