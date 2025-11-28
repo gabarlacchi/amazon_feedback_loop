@@ -189,195 +189,195 @@ class AmazonECommerceFeedbackLoop():
 
         return unrolled
 
-    # def init_recbole_dataset(self) -> None:
-    #     df = self.dataset_unrolled_cold_start.copy()
-    #     # Features pre-processing
-    #     df["age"] = df.get("age").map(self._simple_tokenize).fillna("")
-    #     df["race"] = df.get("race").map(self._simple_tokenize).fillna("")
-    #     df["education"] = df.get("education").map(self._simple_tokenize).fillna("")
-    #     df["income"] = df.get("income").map(self._simple_tokenize).fillna("")
-    #     df["gender"] = df.get("gender").astype(str).str.strip().str.title()
-    #     df.loc[~df["gender"].isin(["Male", "Female", "Other"]), "gender"] = "Other"
-    #     df["how_often_use_amazon"] = df.get("how_often_use_amazon").map(self._simple_tokenize).fillna("")
-    #     df["smoke_cigarettes"] = self._to_bool01(df.get("smoke_cigarettes")).fillna(0)
-    #     df["has_diabet"] = self._to_bool01(df.get("has_diabet")).fillna(0)
-        
-    #     df["category"] = df.get("category").map(self._simple_tokenize).fillna("")
-    #     df["title"] = df.get("Title").map(self._simple_tokenize).fillna("")
-
-    #     df = df.loc[df["user_id"].isin(self.users_ids)
-    #                 & df["item_id"].isin(self.items_ids)].copy()
-
-    #     base_time_col = "timestamp" if "timestamp" in df.columns else "date"
-    #     df["__rome_date"], _ = self._rome_midnight_and_epoch(df[base_time_col])
-
-    #     # User features
-    #     user_feats = (
-    #         df.sort_values("__rome_date")
-    #           .drop_duplicates("user_id", keep="last")
-    #           .loc[:, ["user_id", "age", "race", "education", "income", "gender",
-    #                    "how_often_use_amazon", "smoke_cigarettes", "has_diabet"]]
-    #     )
-    #     user_feats = user_feats[user_feats["user_id"].isin(self.users_ids)]
-
-    #     user_df = user_feats.rename(columns={
-    #         "user_id": "user_id:token",
-    #         "age": "age:token",
-    #         "race": "race:token",
-    #         "education": "education:token",
-    #         "income": "income:token",
-    #         "gender": "gender:token",
-    #         "how_often_use_amazon": "how_often_use_amazon:token",
-    #         "smoke_cigarettes": "smoke_cigarettes:float",
-    #         "has_diabet": "has_diabet:float",
-    #     })
-
-    #     # Item features
-    #     item_feats = (
-    #         df.sort_values("__rome_date")
-    #           .drop_duplicates("item_id", keep="last")
-    #           .loc[:, ["item_id", "category", "title"]]
-    #     )
-    #     item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
-
-    #     item_df = item_feats.rename(columns={
-    #         "item_id": "item_id:token",
-    #         "category": "category:token",
-    #         "title": "title:token_seq", 
-    #     })
-
-    #     user_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), index=False, sep='\t') 
-    #     item_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.item"), index=False, sep='\t') 
-
-    #     working_df = self.dataset_unrolled_cold_start.copy()
-
-    #     train_len = self.train_window_months
-
-    #     working_df["date"] = pd.to_datetime(working_df["date"], utc=True)
-    #     # To avoid some outlier errors
-    #     working_df["date"] = working_df["date"].dt.tz_convert("Europe/Rome").dt.normalize()
-
-    #     working_df["timestamp"] = (working_df["date"].astype("int64") // 10**9).astype(float)
-    #     working_df["month"] = working_df["date"].dt.to_period("M")
-
-    #     months = np.sort(working_df["month"].unique())
-        
-    #     train_start_idx = 0
-    #     train_end_idx = train_len - 3
-    #     val_idx  = train_end_idx + 1
-    #     test_idx = train_end_idx + 2
-
-    #     train_start = months[train_start_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
-    #     train_end = months[train_end_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
-    #     val_start = months[val_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
-    #     val_end = months[val_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
-    #     test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
-    #     test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
-
-    #     working_df["price_per_unit"] = self._ensure_numeric(working_df.get("price_per_unit"))
-
-    #     grouped = (
-    #         working_df
-    #         .groupby(["user_id", "item_id", "timestamp"], as_index=False)
-    #         .agg(
-    #             interaction_count=("item_id", "size"),
-    #             price_per_unit=("price_per_unit", "mean"),
-    #             date=("date", "first"),
-    #         )
-    #     )
-    #     grouped["label"] = 1.0  # ! Use binary implicit positives !
-
-    #     # Masks
-    #     train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
-    #     val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
-    #     test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
-
-    #     # Headers
-    #     cols = [
-    #         "user_id:token", "item_id:token", "timestamp:float",
-    #         "label:float", "price_per_unit:float", "interaction_count:float", "date"
-    #     ]
-    #     grouped = grouped.rename(columns={
-    #         "user_id": "user_id:token",
-    #         "item_id": "item_id:token",
-    #         "timestamp": "timestamp:float",
-    #         "label": "label:float",
-    #         "price_per_unit": "price_per_unit:float",
-    #         "interaction_count": "interaction_count:float",
-    #     })
-
-    #     # Split frames
-    #     self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
-    #     self.working_val_df = grouped.loc[val_mask,   cols].sort_values(["user_id:token", "timestamp:float"])
-    #     self.working_test_df = grouped.loc[test_mask,  cols].sort_values(["user_id:token", "timestamp:float"])
-
-    #     print(f"\n Train dates: {self.working_train_df.date.min()} - {self.working_train_df.date.max()} \n")
-    #     print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
-    #     print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
-
-    #     expanded_train = self._unroll_by_interaction_count(
-    #         df=self.working_train_df.drop(columns=["date"])
-    #     )
-    #     expanded_val = self._unroll_by_interaction_count(
-    #         df=self.working_val_df.drop(columns=["date"])
-    #     )
-    #     expanded_test = self._unroll_by_interaction_count(
-    #         df=self.working_test_df.drop(columns=["date"])
-    #     )
-
-    #     expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
-    #                         index=False, sep="\t")
-    #     expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
-    #                         index=False, sep="\t")
-    #     expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
-    #                         index=False, sep="\t")
-
-
     def init_recbole_dataset(self) -> None:
-        working_df = self.dataset_unrolled_cold_start.copy()
-        working_df['date'] = pd.to_datetime(working_df['date'], format="%Y-%m-%d")
-        working_df['timestamp'] = working_df.date.values.astype(np.int64) // 10 ** 9
-        working_df = working_df[["user_id", "item_id", "timestamp", "date"]].rename(columns=
-            {
-                "user_id": "user_id:token",
-                "item_id": "item_id:token",
-                "timestamp": "timestamp:float",
-            }
+        df = self.dataset_unrolled_cold_start.copy()
+        # Features pre-processing
+        df["age"] = df.get("age").map(self._simple_tokenize).fillna("")
+        df["race"] = df.get("race").map(self._simple_tokenize).fillna("")
+        df["education"] = df.get("education").map(self._simple_tokenize).fillna("")
+        df["income"] = df.get("income").map(self._simple_tokenize).fillna("")
+        df["gender"] = df.get("gender").astype(str).str.strip().str.title()
+        df.loc[~df["gender"].isin(["Male", "Female", "Other"]), "gender"] = "Other"
+        df["how_often_use_amazon"] = df.get("how_often_use_amazon").map(self._simple_tokenize).fillna("")
+        df["smoke_cigarettes"] = self._to_bool01(df.get("smoke_cigarettes")).fillna(0)
+        df["has_diabet"] = self._to_bool01(df.get("has_diabet")).fillna(0)
+        
+        df["category"] = df.get("category").map(self._simple_tokenize).fillna("")
+        df["title"] = df.get("Title").map(self._simple_tokenize).fillna("")
+
+        df = df.loc[df["user_id"].isin(self.users_ids)
+                    & df["item_id"].isin(self.items_ids)].copy()
+
+        base_time_col = "timestamp" if "timestamp" in df.columns else "date"
+        df["__rome_date"], _ = self._rome_midnight_and_epoch(df[base_time_col])
+
+        # User features
+        user_feats = (
+            df.sort_values("__rome_date")
+              .drop_duplicates("user_id", keep="last")
+              .loc[:, ["user_id", "age", "race", "education", "income", "gender",
+                       "how_often_use_amazon", "smoke_cigarettes", "has_diabet"]]
         )
-        working_df = working_df[(working_df['user_id:token'].isin(self.users_ids)) & (working_df['item_id:token'].isin(self.items_ids))]
+        user_feats = user_feats[user_feats["user_id"].isin(self.users_ids)]
 
-        # Define training: from start of the dataset to (initialization months)- 2 
-        self.start_training_filter = datetime(self.initialization_dataset.y1, 1, 1)
-        self.end_train_filter = datetime(self.initialization_dataset.y1, 1, 1) + relativedelta(months=self.config.cold_start_months-2) - relativedelta(days=1)
-        train_filter_dates = (working_df['date'] >= self.start_training_filter) & (working_df['date'] <= self.end_train_filter)
+        user_df = user_feats.rename(columns={
+            "user_id": "user_id:token",
+            "age": "age:token",
+            "race": "race:token",
+            "education": "education:token",
+            "income": "income:token",
+            "gender": "gender:token",
+            "how_often_use_amazon": "how_often_use_amazon:token",
+            "smoke_cigarettes": "smoke_cigarettes:float",
+            "has_diabet": "has_diabet:float",
+        })
 
-        # Define validation: from end of training, plus 1 month more
-        self.start_val_filter = self.end_train_filter + relativedelta(days=1)
-        self.end_val_filter = self.start_val_filter + relativedelta(months=1) - relativedelta(days=1)
-        val_filter_dates = (working_df['date'] >= self.start_val_filter) & (working_df['date'] <= self.end_val_filter)
+        # Item features
+        item_feats = (
+            df.sort_values("__rome_date")
+              .drop_duplicates("item_id", keep="last")
+              .loc[:, ["item_id", "category", "title"]]
+        )
+        item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
 
-        # Define test: from end of validation, plus 1 month
-        self.start_test_filter = self.end_val_filter + relativedelta(days=1)
-        self.end_test_filter = self.start_test_filter + relativedelta(months=1) - relativedelta(days=1)
-        test_filter_dates = (working_df['date'] >= self.start_test_filter) & (working_df['date'] <= self.end_test_filter)
+        item_df = item_feats.rename(columns={
+            "item_id": "item_id:token",
+            "category": "category:token",
+            "title": "title:token_seq", 
+        })
 
-        # Filter data
-        self.working_train_df = working_df[train_filter_dates]
-        self.working_train_df = self.working_train_df[["user_id:token", "item_id:token", "timestamp:float"]]
+        user_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), index=False, sep='\t') 
+        item_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.item"), index=False, sep='\t') 
 
-        self.working_val_df = working_df[val_filter_dates]
-        self.working_val_df = self.working_val_df[["user_id:token", "item_id:token", "timestamp:float"]]
+        working_df = self.dataset_unrolled_cold_start.copy()
 
-        self.working_test_df = working_df[test_filter_dates]
-        self.working_test_df = self.working_test_df[["user_id:token", "item_id:token", "timestamp:float"]]
+        train_len = self.train_window_months
 
-        self.test_users_ids = self.working_test_df['user_id:token'].unique()
-        self.test_items_ids = self.working_test_df['item_id:token'].unique()
+        working_df["date"] = pd.to_datetime(working_df["date"], utc=True)
+        # To avoid some outlier errors
+        working_df["date"] = working_df["date"].dt.tz_convert("Europe/Rome").dt.normalize()
 
-        self.working_train_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part1.inter"), index=False, sep='\t') 
-        self.working_val_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part2.inter"), index=False, sep='\t') 
-        self.working_test_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part3.inter"), index=False, sep='\t')
-        return self.working_train_df, self.working_val_df, self.working_test_df
+        working_df["timestamp"] = (working_df["date"].astype("int64") // 10**9).astype(float)
+        working_df["month"] = working_df["date"].dt.to_period("M")
+
+        months = np.sort(working_df["month"].unique())
+        
+        train_start_idx = 0
+        train_end_idx = train_len - 3
+        val_idx  = train_end_idx + 1
+        test_idx = train_end_idx + 2
+
+        train_start = months[train_start_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+        train_end = months[train_end_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+        val_start = months[val_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+        val_end = months[val_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+        test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+        test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+
+        working_df["price_per_unit"] = self._ensure_numeric(working_df.get("price_per_unit"))
+
+        grouped = (
+            working_df
+            .groupby(["user_id", "item_id", "timestamp"], as_index=False)
+            .agg(
+                interaction_count=("item_id", "size"),
+                price_per_unit=("price_per_unit", "mean"),
+                date=("date", "first"),
+            )
+        )
+        grouped["label"] = 1.0  # ! Use binary implicit positives !
+
+        # Masks
+        train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
+        val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
+        test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
+
+        # Headers
+        cols = [
+            "user_id:token", "item_id:token", "timestamp:float",
+            "label:float", "price_per_unit:float", "interaction_count:float", "date"
+        ]
+        grouped = grouped.rename(columns={
+            "user_id": "user_id:token",
+            "item_id": "item_id:token",
+            "timestamp": "timestamp:float",
+            "label": "label:float",
+            "price_per_unit": "price_per_unit:float",
+            "interaction_count": "interaction_count:float",
+        })
+
+        # Split frames
+        self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+        self.working_val_df = grouped.loc[val_mask,   cols].sort_values(["user_id:token", "timestamp:float"])
+        self.working_test_df = grouped.loc[test_mask,  cols].sort_values(["user_id:token", "timestamp:float"])
+
+        print(f"\n Train dates: {self.working_train_df.date.min()} - {self.working_train_df.date.max()} \n")
+        print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
+        print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
+
+        expanded_train = self._unroll_by_interaction_count(
+            df=self.working_train_df.drop(columns=["date"])
+        )
+        expanded_val = self._unroll_by_interaction_count(
+            df=self.working_val_df.drop(columns=["date"])
+        )
+        expanded_test = self._unroll_by_interaction_count(
+            df=self.working_test_df.drop(columns=["date"])
+        )
+
+        expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
+                            index=False, sep="\t")
+        expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
+                            index=False, sep="\t")
+        expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
+                            index=False, sep="\t")
+
+
+    # def init_recbole_dataset(self) -> None:
+    #     working_df = self.dataset_unrolled_cold_start.copy()
+    #     working_df['date'] = pd.to_datetime(working_df['date'], format="%Y-%m-%d")
+    #     working_df['timestamp'] = working_df.date.values.astype(np.int64) // 10 ** 9
+    #     working_df = working_df[["user_id", "item_id", "timestamp", "date"]].rename(columns=
+    #         {
+    #             "user_id": "user_id:token",
+    #             "item_id": "item_id:token",
+    #             "timestamp": "timestamp:float",
+    #         }
+    #     )
+    #     working_df = working_df[(working_df['user_id:token'].isin(self.users_ids)) & (working_df['item_id:token'].isin(self.items_ids))]
+
+    #     # Define training: from start of the dataset to (initialization months)- 2 
+    #     self.start_training_filter = datetime(self.initialization_dataset.y1, 1, 1)
+    #     self.end_train_filter = datetime(self.initialization_dataset.y1, 1, 1) + relativedelta(months=self.config.cold_start_months-2) - relativedelta(days=1)
+    #     train_filter_dates = (working_df['date'] >= self.start_training_filter) & (working_df['date'] <= self.end_train_filter)
+
+    #     # Define validation: from end of training, plus 1 month more
+    #     self.start_val_filter = self.end_train_filter + relativedelta(days=1)
+    #     self.end_val_filter = self.start_val_filter + relativedelta(months=1) - relativedelta(days=1)
+    #     val_filter_dates = (working_df['date'] >= self.start_val_filter) & (working_df['date'] <= self.end_val_filter)
+
+    #     # Define test: from end of validation, plus 1 month
+    #     self.start_test_filter = self.end_val_filter + relativedelta(days=1)
+    #     self.end_test_filter = self.start_test_filter + relativedelta(months=1) - relativedelta(days=1)
+    #     test_filter_dates = (working_df['date'] >= self.start_test_filter) & (working_df['date'] <= self.end_test_filter)
+
+    #     # Filter data
+    #     self.working_train_df = working_df[train_filter_dates]
+    #     self.working_train_df = self.working_train_df[["user_id:token", "item_id:token", "timestamp:float"]]
+
+    #     self.working_val_df = working_df[val_filter_dates]
+    #     self.working_val_df = self.working_val_df[["user_id:token", "item_id:token", "timestamp:float"]]
+
+    #     self.working_test_df = working_df[test_filter_dates]
+    #     self.working_test_df = self.working_test_df[["user_id:token", "item_id:token", "timestamp:float"]]
+
+    #     self.test_users_ids = self.working_test_df['user_id:token'].unique()
+    #     self.test_items_ids = self.working_test_df['item_id:token'].unique()
+
+    #     self.working_train_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part1.inter"), index=False, sep='\t') 
+    #     self.working_val_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part2.inter"), index=False, sep='\t') 
+    #     self.working_test_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part3.inter"), index=False, sep='\t')
+    #     return self.working_train_df, self.working_val_df, self.working_test_df
 
     def init_recbole_model(self):
         if self.model_name_config == "Individual Random":
