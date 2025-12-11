@@ -28,6 +28,7 @@ from recbole.model.general_recommender import Pop, Random, MultiVAE, ItemKNN
 from recbole.trainer import Trainer
 from recbole.data.interaction import Interaction
 from recbole.trainer import HyperTuning
+from recbole.utils import get_model, get_trainer
 
 from utils import DotDict, get_consistent_users, _setup_repro
 from custom_models import UserKNN, IndividualRandom, IndividualPopularity, LightGCN, BPR, SpectralCF, NeuMF, NNCF
@@ -105,12 +106,23 @@ class AmazonECommerceFeedbackLoop():
             self.parameter_dict["reproducibility"] = True
     
     def init_experiment(self) -> None:
+        # Set up unrolled dataset original with columns based on the item id chosen
         df_dataset_total = self.initialization_dataset.unrolled_dataset_total
+        self.item_id_col = self.config.item_level
+        if not self.item_id_col in list(df_dataset_total.columns):
+            raise Exception(f"item level must be a column of the dataeset -> {self.item_id_col} not found in dataset")
+
+        if self.item_id_col == "category":
+            # Remove item_id and title cols
+            df_dataset_total.drop(["item_id", "Title"], axis=1, inplace=True)
+            df_dataset_total = df_dataset_total.rename({"category": "item_id"}, axis=1)
+
+            self.initialization_dataset.unrolled_dataset_total = df_dataset_total
+
         df_dataset_total['date'] = pd.to_datetime(df_dataset_total['date'], format="%Y-%m-%d")
         df_dataset_total['timestamp'] = df_dataset_total.date.values.astype(np.int64) // 10 ** 9
 
         # Get the first available date 
-
         self.cold_start_start_date = df_dataset_total['date'].min().date()
         self.cold_start_end_date = self.cold_start_start_date + relativedelta(months=self.config.cold_start_months) - relativedelta(days=1)
 
@@ -189,479 +201,167 @@ class AmazonECommerceFeedbackLoop():
 
         return unrolled
 
-    def init_recbole_dataset(self) -> None:
-        df = self.dataset_unrolled_cold_start.copy()
-        # Features pre-processing
-        df["age"] = df.get("age").map(self._simple_tokenize).fillna("")
-        df["race"] = df.get("race").map(self._simple_tokenize).fillna("")
-        df["education"] = df.get("education").map(self._simple_tokenize).fillna("")
-        df["income"] = df.get("income").map(self._simple_tokenize).fillna("")
-        df["gender"] = df.get("gender").astype(str).str.strip().str.title()
-        df.loc[~df["gender"].isin(["Male", "Female", "Other"]), "gender"] = "Other"
-        df["how_often_use_amazon"] = df.get("how_often_use_amazon").map(self._simple_tokenize).fillna("")
-        df["smoke_cigarettes"] = self._to_bool01(df.get("smoke_cigarettes")).fillna(0)
-        df["has_diabet"] = self._to_bool01(df.get("has_diabet")).fillna(0)
-        
-        df["category"] = df.get("category").map(self._simple_tokenize).fillna("")
-        df["title"] = df.get("Title").map(self._simple_tokenize).fillna("")
-
-        df = df.loc[df["user_id"].isin(self.users_ids)
-                    & df["item_id"].isin(self.items_ids)].copy()
-
-        base_time_col = "timestamp" if "timestamp" in df.columns else "date"
-        df["__rome_date"], _ = self._rome_midnight_and_epoch(df[base_time_col])
-
-        # User features
-        user_feats = (
-            df.sort_values("__rome_date")
-              .drop_duplicates("user_id", keep="last")
-              .loc[:, ["user_id", "age", "race", "education", "income", "gender",
-                       "how_often_use_amazon", "smoke_cigarettes", "has_diabet"]]
-        )
-        user_feats = user_feats[user_feats["user_id"].isin(self.users_ids)]
-
-        user_df = user_feats.rename(columns={
-            "user_id": "user_id:token",
-            "age": "age:token",
-            "race": "race:token",
-            "education": "education:token",
-            "income": "income:token",
-            "gender": "gender:token",
-            "how_often_use_amazon": "how_often_use_amazon:token",
-            "smoke_cigarettes": "smoke_cigarettes:float",
-            "has_diabet": "has_diabet:float",
-        })
-
-        # Item features
-        item_feats = (
-            df.sort_values("__rome_date")
-              .drop_duplicates("item_id", keep="last")
-              .loc[:, ["item_id", "category", "title"]]
-        )
-        item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
-
-        item_df = item_feats.rename(columns={
-            "item_id": "item_id:token",
-            "category": "category:token",
-            "title": "title:token_seq", 
-        })
-
-        user_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), index=False, sep='\t') 
-        item_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.item"), index=False, sep='\t') 
-
-        working_df = self.dataset_unrolled_cold_start.copy()
-
-        train_len = self.train_window_months
-
-        working_df["date"] = pd.to_datetime(working_df["date"], utc=True)
-        # To avoid some outlier errors
-        working_df["date"] = working_df["date"].dt.tz_convert("Europe/Rome").dt.normalize()
-
-        working_df["timestamp"] = (working_df["date"].astype("int64") // 10**9).astype(float)
-        working_df["month"] = working_df["date"].dt.to_period("M")
-
-        months = np.sort(working_df["month"].unique())
-        
-        train_start_idx = 0
-        train_end_idx = train_len - 3
-        val_idx  = train_end_idx + 1
-        test_idx = train_end_idx + 2
-
-        train_start = months[train_start_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
-        train_end = months[train_end_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
-        val_start = months[val_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
-        val_end = months[val_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
-        test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
-        test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
-
-        working_df["price_per_unit"] = self._ensure_numeric(working_df.get("price_per_unit"))
-
-        grouped = (
-            working_df
-            .groupby(["user_id", "item_id", "timestamp"], as_index=False)
-            .agg(
-                interaction_count=("item_id", "size"),
-                price_per_unit=("price_per_unit", "mean"),
-                date=("date", "first"),
-            )
-        )
-        grouped["label"] = 1.0  # ! Use binary implicit positives !
-
-        # Masks
-        train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
-        val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
-        test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
-
-        # Headers
-        cols = [
-            "user_id:token", "item_id:token", "timestamp:float",
-            "label:float", "price_per_unit:float", "interaction_count:float", "date"
-        ]
-        grouped = grouped.rename(columns={
-            "user_id": "user_id:token",
-            "item_id": "item_id:token",
-            "timestamp": "timestamp:float",
-            "label": "label:float",
-            "price_per_unit": "price_per_unit:float",
-            "interaction_count": "interaction_count:float",
-        })
-
-        # Split frames
-        self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
-        self.working_val_df = grouped.loc[val_mask,   cols].sort_values(["user_id:token", "timestamp:float"])
-        self.working_test_df = grouped.loc[test_mask,  cols].sort_values(["user_id:token", "timestamp:float"])
-
-        print(f"\n Train dates: {self.working_train_df.date.min()} - {self.working_train_df.date.max()} \n")
-        print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
-        print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
-
-        expanded_train = self._unroll_by_interaction_count(
-            df=self.working_train_df.drop(columns=["date"])
-        )
-        expanded_val = self._unroll_by_interaction_count(
-            df=self.working_val_df.drop(columns=["date"])
-        )
-        expanded_test = self._unroll_by_interaction_count(
-            df=self.working_test_df.drop(columns=["date"])
-        )
-
-        expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
-                            index=False, sep="\t")
-        expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
-                            index=False, sep="\t")
-        expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
-                            index=False, sep="\t")
-
-
-    # def init_recbole_dataset(self) -> None:
-    #     working_df = self.dataset_unrolled_cold_start.copy()
-    #     working_df['date'] = pd.to_datetime(working_df['date'], format="%Y-%m-%d")
-    #     working_df['timestamp'] = working_df.date.values.astype(np.int64) // 10 ** 9
-    #     working_df = working_df[["user_id", "item_id", "timestamp", "date"]].rename(columns=
-    #         {
-    #             "user_id": "user_id:token",
-    #             "item_id": "item_id:token",
-    #             "timestamp": "timestamp:float",
-    #         }
-    #     )
-    #     working_df = working_df[(working_df['user_id:token'].isin(self.users_ids)) & (working_df['item_id:token'].isin(self.items_ids))]
-
-    #     # Define training: from start of the dataset to (initialization months)- 2 
-    #     self.start_training_filter = datetime(self.initialization_dataset.y1, 1, 1)
-    #     self.end_train_filter = datetime(self.initialization_dataset.y1, 1, 1) + relativedelta(months=self.config.cold_start_months-2) - relativedelta(days=1)
-    #     train_filter_dates = (working_df['date'] >= self.start_training_filter) & (working_df['date'] <= self.end_train_filter)
-
-    #     # Define validation: from end of training, plus 1 month more
-    #     self.start_val_filter = self.end_train_filter + relativedelta(days=1)
-    #     self.end_val_filter = self.start_val_filter + relativedelta(months=1) - relativedelta(days=1)
-    #     val_filter_dates = (working_df['date'] >= self.start_val_filter) & (working_df['date'] <= self.end_val_filter)
-
-    #     # Define test: from end of validation, plus 1 month
-    #     self.start_test_filter = self.end_val_filter + relativedelta(days=1)
-    #     self.end_test_filter = self.start_test_filter + relativedelta(months=1) - relativedelta(days=1)
-    #     test_filter_dates = (working_df['date'] >= self.start_test_filter) & (working_df['date'] <= self.end_test_filter)
-
-    #     # Filter data
-    #     self.working_train_df = working_df[train_filter_dates]
-    #     self.working_train_df = self.working_train_df[["user_id:token", "item_id:token", "timestamp:float"]]
-
-    #     self.working_val_df = working_df[val_filter_dates]
-    #     self.working_val_df = self.working_val_df[["user_id:token", "item_id:token", "timestamp:float"]]
-
-    #     self.working_test_df = working_df[test_filter_dates]
-    #     self.working_test_df = self.working_test_df[["user_id:token", "item_id:token", "timestamp:float"]]
-
-    #     self.test_users_ids = self.working_test_df['user_id:token'].unique()
-    #     self.test_items_ids = self.working_test_df['item_id:token'].unique()
-
-    #     self.working_train_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part1.inter"), index=False, sep='\t') 
-    #     self.working_val_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part2.inter"), index=False, sep='\t') 
-    #     self.working_test_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part3.inter"), index=False, sep='\t')
-    #     return self.working_train_df, self.working_val_df, self.working_test_df
-
     def init_recbole_model(self):
-        if self.model_name_config == "Individual Random":
-            self.model_name_recbole = "Pop"
-        elif self.model_name_config == "Individual Popularity":
-            self.model_name_recbole = "Pop"
-        elif self.model_name_config == "Collective Random":
-            self.model_name_recbole = "Random"
-        elif self.model_name_config == "Collective Popularity":
-            self.model_name_recbole = "Pop"
-        elif self.model_name_config == "CF_KNN_user":
-            self.model_name_recbole = "ItemKNN"
-        elif self.model_name_config == "CF_KNN_item":
-            self.model_name_recbole = "ItemKNN"
-        elif self.model_name_config == "MultiVAE":
-            self.model_name_recbole = "MultiVAE"
-        elif self.model_name_config == "BPR":
-            self.model_name_recbole = "BPR"
-        elif self.model_name_config == "LightGCN":
-            self.model_name_recbole = "LightGCN"
-        elif self.model_name_config == "SpectralCF":
-            self.model_name_recbole = "SpectralCF"
-        elif self.model_name_config == "NNCF":
-            self.model_name_recbole = "NNCF"
-        elif self.model_name_config == "NeuMF":
-            self.model_name_recbole = "NeuMF"
-        else:
-            raise Exception(f"Model name not recognized")
-        
-        parameter_dict = {
+        name_map = {
+            "Collective Popularity": "Pop",
+            "Collective Random": "Random",
+            "CF_KNN_item": "ItemKNN",
+            "MultiVAE": "MultiVAE",
+            "BPR": "BPR",
+            "LightGCN": "LightGCN",
+            "SpectralCF": "SpectralCF",
+            "NeuMF": "NeuMF",
+            "DeepFM": "DeepFM", 
+            "xDeepFM": "xDeepFM",
+            "DCN V2": "DCNv2"
+        }
+        try:
+            self.raw_model_name = self.config.recommender_model.model_name
+            self.model_name_recbole = name_map[self.raw_model_name]
+        except Exception as e:
+            traceback.print_exc()
+            raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
+
+        self.parameter_dict = {
             'data_path': self.tmp_folder,
             'checkpoint_dir': os.path.join(self.tmp_folder, "checkpoints"),
-            'USER_ID_FIELD': 'user_id',
-            'ITEM_ID_FIELD': 'item_id',
-            'TIME_FIELD': 'timestamp',
-            'load_col': {
-                'inter': ['user_id', 'item_id', 'timestamp']
+
+            "USER_ID_FIELD": "user_id",
+            "ITEM_ID_FIELD": "item_id",
+            "TIME_FIELD": "timestamp",
+            "LABEL_FIELD": "label",
+
+            "load_col": {
+                "inter": ["user_id", "item_id", "timestamp", "label", "price_per_unit", "interaction_count"],
+                "user":  ["user_id", "age", "race", "education", "income", "gender",
+                        "how_often_use_amazon", "smoke_cigarettes", "has_diabet"],
+                "item":  ["item_id", "category", "title"],
             },
-            'epochs': self.config.recommender_model.epochs,
-            'eval_args': {
-                'group_by': 'user_id',
-                'order': 'TO',
-                'split': {'LS': 'valid_and_test'},
-                'mode': 'full'
-            },
-            'benchmark_filename': ['train', 'val', 'test'],
-            'reproducibility': True,
-            'seed': self.master_seed,
-            'metrics': ["Precision", "Recall", "Hit", "NDCG", "ItemCoverage", "MRR", "MAP", "AveragePopularity"],
-            'topk': 10,
-            'valid_metric': 'NDCG@10',
-            'use_gpu': True,
-            'gpu_id': 0,
-            "learning_rate": self.config.recommender_model.learning_rate if hasattr(self.config.recommender_model, "learning_rate") else 0.005,
-            "n_layers": self.config.recommender_model.n_layers if hasattr(self.config.recommender_model, "n_layers") else None,
-            "reg_weight": self.config.recommender_model.reg_weight if hasattr(self.config.recommender_model, "reg_weight") else None,
-            "k": self.config.recommender_model.K if hasattr(self.config.recommender_model, "K") else 100,
-            "shrink": self.config.recommender_model.shrink if hasattr(self.config.recommender_model, "shrink") else 0.0,
-            "user_embedding_size": self.config.recommender_model.user_embedding_size if hasattr(self.config.recommender_model, "user_embedding_size") else 64,
-            "item_embedding_size": self.config.recommender_model.item_embedding_size if hasattr(self.config.recommender_model, "item_embedding_size") else 64,
-            "user_hidden_size_list": self.config.recommender_model.user_hidden_size_list if hasattr(self.config.recommender_model, "user_hidden_size_list") else [64, 64],
-            "item_hidden_size_list": self.config.recommender_model.item_hidden_size_list if hasattr(self.config.recommender_model, "item_hidden_size_list") else [64, 64],
-            "inter_matrix_type": self.config.recommender_model.inter_matrix_type if hasattr(self.config.recommender_model, "inter_matrix_type") else "01",
-            "mlp_hidden_size": self.config.recommender_model.mlp_hidden_size if hasattr(self.config.recommender_model, "mlp_hidden_size") else [64, 32, 16],
-            "dropout_prob": self.config.recommender_model.dropout_prob if hasattr(self.config.recommender_model, "dropout_prob") else 0.1,
-            "neigh_embedding_size": self.config.recommender_model.neigh_embedding_size if hasattr(self.config.recommender_model, "neigh_embedding_size") else 64,
-            "num_conv_kernel": self.config.recommender_model.num_conv_kernel if hasattr(self.config.recommender_model, "num_conv_kernel") else 128
+
+            # training / eval
+            "epochs": getattr(self.config.recommender_model, "train_epochs", 10),
+            "eval_args": {"group_by": "user", "order": "TO", "mode": "full"},
+            "benchmark_filename": ["train", "val", "test"],
+            "reproducibility": True,
+            "seed": self.master_seed,
+
+            "metrics": ["NDCG", "Recall", "Precision", "Hit", "ItemCoverage", "MRR", "MAP"],
+            "topk": 10,
+            "valid_metric": "NDCG@10",
+
+            # implicit negatives
+            "train_neg_sample_args": {"distribution": "uniform", "sample_num": 3},
+
+            "use_gpu": torch.cuda.is_available(),
+            "gpu_id": 0,
         }
-        self.parameter_dict = parameter_dict   
+
+        # Optional per-model parameters pulled from config
+        model_cfg = getattr(self.config, "recommender_model", None)
+
+        def add_if(attr, key=None):
+            if hasattr(model_cfg, attr):
+                self.parameter_dict[key or attr] = getattr(model_cfg, attr)
+        
+        add_if("learning_rate", "learning_rate")
+
+        if self.model_name_recbole == "ItemKNN":
+            add_if("k", "k")
+            add_if("shrink", "shrink")
+            self.parameter_dict.setdefault("similarity", "cosine")
+            self.parameter_dict.setdefault("normalize", True)
+        elif self.model_name_recbole == "BPR":
+            add_if("reg_weight", "reg_weight")
+        elif self.model_name_recbole == "LightGCN":
+            add_if("reg_weight", "reg_weight")
+            add_if("n_layers", "n_layers")
+        elif self.model_name_recbole == "NeuMF":
+            add_if("mlp_hidden_size", "mlp_hidden_size")
+            add_if("user_embedding_size", "mlp_embedding_size")
+            add_if("item_embedding_size", "mf_embedding_size")
+        elif self.model_name_recbole == "MultiVAE":
+            add_if("user_hidden_size_list", "user_hidden_size_list")
+            add_if("dropout_prob", "dropout_prob")
+            self.parameter_dict.setdefault("latent_dim", 50)
+        elif self.model_name_recbole == "SpectralCF":
+            add_if("n_layers", "n_layers")
+            add_if("reg_weight", "reg_weight")
+        elif self.model_name_recbole == "DeepFM":
+            self.parameter_dict.setdefault("embedding_size", 16)
+            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
+            self.parameter_dict.setdefault("dropout_prob", 0.2)
+            self.parameter_dict.setdefault("reg_weight", 1e-6)
+            add_if("embedding_size")
+            add_if("mlp_hidden_size")
+            add_if("dropout_prob")
+            add_if("reg_weight")
+
+        elif self.model_name_recbole == "DeepFM":
+            # FM (second-order) + MLP over concatenated embeddings
+            self.parameter_dict.setdefault("embedding_size", 16)
+            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
+            self.parameter_dict.setdefault("dropout_prob", 0.2)
+            self.parameter_dict.setdefault("reg_weight", 1e-6)
+            add_if("embedding_size")
+            add_if("mlp_hidden_size")
+            add_if("dropout_prob")
+            add_if("reg_weight")
+
+        elif self.model_name_recbole == "xDeepFM":
+            # CIN (explicit higher-order) + MLP (implicit) + linear/FMs
+            self.parameter_dict.setdefault("embedding_size", 16)
+            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
+            self.parameter_dict.setdefault("cin_layer_size", [16, 16])
+            self.parameter_dict.setdefault("dropout_prob", 0.2)
+            self.parameter_dict.setdefault("reg_weight", 1e-6)
+            add_if("embedding_size")
+            add_if("mlp_hidden_size")
+            add_if("cin_layer_size")
+            add_if("dropout_prob")
+            add_if("reg_weight")
+
+        elif self.model_name_recbole == "DCNv2":
+            # Cross network v2 + deep MLP
+            self.parameter_dict.setdefault("embedding_size", 16)
+            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
+            self.parameter_dict.setdefault("cross_layer_num", 3)   # number of cross layers
+            # low_rank and num_experts are optional in some RecBole versions of DCNv2
+            add_if("embedding_size")
+            add_if("mlp_hidden_size")
+            add_if("cross_layer_num")
+            add_if("low_rank")
+            add_if("num_experts")
+
+        add_if("epochs", "epochs")
+
+        # Remove None
+        self.parameter_dict = {k: v for k, v in self.parameter_dict.items() if v is not None}
 
         try:
-            self.model_config = Config(model=self.model_name_recbole, dataset=f'experiment_dataset', config_dict=self.parameter_dict)
-            init_seed(self.model_config['seed'], self.model_config['reproducibility'])
+            self.model_config = Config(
+                model=self.model_name_recbole,
+                dataset="experiment_dataset",
+                config_dict=self.parameter_dict
+            )
+            init_seed(self.model_config["seed"], self.model_config["reproducibility"])
             init_logger(self.model_config)
             self.logger = getLogger()
-            c_handler = logging.StreamHandler()
-            c_handler.setLevel(logging.INFO)
-            self.logger.addHandler(c_handler)
         except Exception as e:
             raise Exception(f"Error during the configuration of the model -> {e}")
-        
+
         try:
             self.recbole_dataset = create_dataset(self.model_config)
-            self.train_data, self.valid_data, self.test_data = data_preparation(config=self.model_config, dataset=self.recbole_dataset)
+            self.train_data, self.valid_data, self.test_data = data_preparation(
+                config=self.model_config,
+                dataset=self.recbole_dataset
+            )
             self.logger.info(self.train_data)
         except Exception as e:
+            print(traceback.format_exc())
             raise Exception(f"Error during the initialization of the dataset -> {e}")
-        
-        if self.model_name_config == "Individual Random":
-            self.recbole_model = IndividualRandom(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "Collective Random":
-            self.recbole_model = Random(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "Individual Popularity":
-            self.recbole_model = IndividualPopularity(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "Collective Popularity":
-            self.recbole_model = Pop(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "CF_KNN_item":
-            self.recbole_model = ItemKNN(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "CF_KNN_user":
-            self.recbole_model = UserKNN(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "MultiVAE":
-            self.recbole_model = MultiVAE(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "BPR":
-            self.recbole_model = BPR(config=self.model_config, dataset=self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "LightGCN":
-            self.recbole_model = LightGCN(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "NeuMF":
-            self.recbole_model = NeuMF(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "SpectralCF":
-            self.recbole_model = SpectralCF(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        elif self.model_name_config == "NNCF":
-            self.recbole_model = NNCF(self.model_config, self.recbole_dataset).to(self.model_config['device'])
-        else:
-            raise Exception(f"Something's wrong with the model name")
 
-        trainer = Trainer(self.model_config, self.recbole_model)
-
-        # Initialize lists to store results from all epochs
-        all_validation_results = []
-        all_test_results = []
-        all_train_losses = []
-
-        # Store original methods
-        original_valid_epoch = trainer._valid_epoch
-        original_train_epoch = trainer._train_epoch
-
-        def custom_train_epoch(train_data, epoch_idx, loss_func=None, show_progress=False):
-            # Call original training epoch
-            train_loss = original_train_epoch(train_data, epoch_idx, loss_func, show_progress)
-            # Store training loss
-            all_train_losses.append(train_loss)
-            return train_loss
-
-        def custom_valid_epoch(valid_data, show_progress=False):
-            # Call original validation
-            valid_result = original_valid_epoch(valid_data, show_progress)
-            # Store validation results
-            all_validation_results.append(valid_result)
-            # Also evaluate on test data
-            test_result = trainer.evaluate(self.test_data, load_best_model=False, show_progress=False)
-            all_test_results.append(test_result)
-            return valid_result
-
-        # Replace the methods
-        trainer._train_epoch = custom_train_epoch
-        trainer._valid_epoch = custom_valid_epoch
-
-        # Train the model
-        best_valid_result = trainer.fit(
-            train_data=self.train_data,
-            valid_data=self.valid_data,
-            show_progress=False,
-            saved=False
-        )
-
-        # Combine all results into DataFrame
-        data_for_df = []
-        max_epochs = max(len(all_train_losses), len(all_validation_results), len(all_test_results))
-
-        for epoch in range(max_epochs):
-            row_data = {"epoch": epoch}
-            
-            # Add training loss
-            if epoch < len(all_train_losses):
-                row_data["train_loss"] = all_train_losses[epoch]
-            
-            # Add validation results
-            if epoch < len(all_validation_results):
-                valid_data = all_validation_results[epoch]
-                if isinstance(valid_data, dict):
-                    for key, value in valid_data.items():
-                        row_data[f"valid_{key}"] = value
-                elif isinstance(valid_data, tuple):
-                    if len(valid_data) >= 2 and isinstance(valid_data[1], dict):
-                        for key, value in valid_data[1].items():
-                            row_data[f"valid_{key}"] = value
-                    elif len(valid_data) >= 1:
-                        row_data["valid_score"] = valid_data[0]
-            
-            # Add test results
-            if epoch < len(all_test_results):
-                for key, value in all_test_results[epoch].items():
-                    row_data[f"test_{key}"] = value
-            
-            data_for_df.append(row_data)
-
-        # Create DataFrame
-        results_df = pd.DataFrame(data_for_df)
-        results_df.set_index('epoch', inplace=True)
-
-        # Separate DataFrames for different metrics
-        validation_cols = [col for col in results_df.columns if col.startswith('valid_')]
-        test_cols = [col for col in results_df.columns if col.startswith('test_')]
-
-        # Create validation DataFrame (remove 'valid_' prefix)
-        validation_df = results_df[validation_cols].copy()
-        validation_df.columns = [col.replace('valid_', '') for col in validation_df.columns]
-
-        # Create test DataFrame (remove 'test_' prefix)
-        test_df = results_df[test_cols].copy()
-        test_df.columns = [col.replace('test_', '') for col in test_df.columns]
-
-        # Create loss DataFrame
-        loss_df = results_df[['train_loss']].copy() if 'train_loss' in results_df.columns else pd.DataFrame()
-
-        # self.best_valid_list = [{"epoch_index": 0, **best_valid_result}]
-
-        # print(loss_df.head(20))
-        # plt.figure(figsize=(10, 10))
-
-        # plt.plot(validation_df.index.values, validation_df["ndcg@10"], label="Validation ndcg@10")
-
-        # plt.plot(test_df.index.values, test_df["ndcg@10"], label="Test ndcg@10")
-
-        # plt.xticks(range(0, len(all_train_losses) + 1, 2), fontsize=25)  # Every 2 epochs
-        # plt.tick_params(axis="y", which="major", labelsize=25)
-        # plt.xlabel("Epochs", fontsize=28)
-        # plt.ylabel("ndcg@10", fontsize=28)
-        # plt.title(f"Training phase: {self.model_name_config}", fontsize=30, fontweight="bold")
-        # plt.grid(True, linestyle="--", alpha=0.5)
-        # plt.legend(fontsize=26, loc="best")
-        # plt.tight_layout()
-
-        # plt.savefig(f"training_phase-model={self.model_name_config}_dataset=amazon.png", bbox_inches='tight')
-        # plt.close()
-
-        # plt.figure(figsize=(10, 10))
-
-        # plt.plot(loss_df.index.values, loss_df["train_loss"], label="Loss")
-
-        # plt.xticks(range(0, len(all_train_losses) + 1, 2), fontsize=25)  # Every 2 epochs
-        # plt.tick_params(axis="y", which="major", labelsize=25)
-        # plt.xlabel("Epochs", fontsize=28)
-        # plt.ylabel("Train loss", fontsize=28)
-        # plt.title(f"Training phase loss: {self.model_name_config}", fontsize=30, fontweight="bold")
-        # plt.grid(True, linestyle="--", alpha=0.5)
-        # plt.legend(fontsize=26, loc="best")
-        # plt.tight_layout()
-
-        # plt.savefig(f"training_phase_loss_model={self.model_name_config}_dataset=amazon.png", bbox_inches='tight')
-        # plt.close()
-
-        json_filename = f"test_metrics_model={self.model_name_config}_dataset=amazon.json"
-
-        if not os.path.exists(json_filename) and all_test_results:
-            final_test_metrics = all_test_results[-1]  # Get metrics from the last epoch
-            
-            # Create a dictionary with the metrics you want to track
-            metrics_to_save = ["Precision", "Recall", "Hit", "NDCG", "ItemCoverage", "MRR", "MAP", "AveragePopularity"]
-            
-            # Filter and organize the metrics
-            test_metrics_json = {}
-            for metric_name in metrics_to_save:
-                # Look for metrics with different possible formats (case variations, @k suffixes)
-                found_metrics = {}
-                for key, value in final_test_metrics.items():
-                    # Check if the metric name is in the key (case insensitive)
-                    if metric_name.lower() in key.lower():
-                        found_metrics[key] = value
-                
-                if found_metrics:
-                    test_metrics_json[metric_name] = found_metrics
-                else:
-                    test_metrics_json[metric_name] = None  # or skip this metric
-            
-            # Also add some metadata
-            test_metrics_json["model_name"] = self.model_name_config
-            test_metrics_json["dataset"] = "amazon"
-            test_metrics_json["total_epochs"] = len(all_test_results)
-            test_metrics_json["final_epoch"] = len(all_test_results) - 1
-            
-            with open(json_filename, 'w') as f:
-                json.dump(test_metrics_json, f, indent=2, default=str)  # default=str handles non-serializable types
-            
-            print(f"Test metrics saved to: {json_filename}")
-            
-            # Optionally print the metrics
-            print("\nFinal Test Metrics:")
-            for metric_name, metric_values in test_metrics_json.items():
-                if metric_name not in ["model_name", "dataset", "total_epochs", "final_epoch"]:
-                    print(f"{metric_name}: {metric_values}")
-
-        else:
-            print("No test results available to save.")
+        model_cls = get_model(self.model_config["model"])
+        self.recbole_model = model_cls(self.model_config, self.train_data.dataset).to(self.model_config["device"])
 
     def tuning_hyperparameters(self) -> None:
         hyper_file = f"tuning_parameters/{self.model_name_config}.hyper"
@@ -672,18 +372,29 @@ class AmazonECommerceFeedbackLoop():
             print(f"\n Tuning of the model {self.model_name_config} already in the folder. Skip \n")
             return None
         def _objective_function(params_dict=None, config_file_list=None):
-            # config = Config(model=self.model_name_recbole, dataset=f'models_tmp/experiment_dataset', config_dict=params_dict)
-            dataset = create_dataset(self.model_config)
-            train_data, valid_data, test_data = data_preparation(config=self.model_config, dataset=dataset)
-            model = self.recbole_model  
-            trainer = Trainer(self.model_config, model)
+            config = Config(
+                model=self.model_name_recbole,
+                dataset='experiment_dataset', 
+                config_file_list=config_file_list,
+                config_dict={**self.parameter_dict, **(params_dict or {})}
+            )
+
+            dataset = create_dataset(config)
+            train_data, valid_data, test_data = data_preparation(config=config, dataset=dataset)
+
+            # model_class = self.recbole_model_class
+            # model = model_class(config, train_data.dataset).to(config['device'])
+            model_cls = get_model(self.model_config["model"])
+            self.recbole_model = model_cls(self.model_config, self.train_data.dataset).to(self.model_config["device"])
+
+            trainer = Trainer(config, self.recbole_model)
             best_valid_score, best_valid_result = trainer.fit(train_data, valid_data, verbose=False)
             test_result = trainer.evaluate(test_data)
 
             return {
                 'model': self.model_name_config,
                 'best_valid_score': best_valid_score,
-                'valid_score_bigger': self.model_config['valid_metric_bigger'],
+                'valid_score_bigger': config['valid_metric_bigger'],
                 'best_valid_result': best_valid_result,
                 'test_result': test_result
             }
@@ -699,59 +410,278 @@ class AmazonECommerceFeedbackLoop():
         self.parameter_dict.update(hp.best_params)
         return None
     
-    def update_train_val_test(self, new_interactions: list, epoch: int = 1):
-        if epoch < 1:
-            raise Exception(f"Current epoch must be > 1")
+    def _build_window_for_epoch(self, k: int = 0, new_interactions = None):
+        # FIRST INITIALIZATION OF THE DATASET
+        if k == 0:
+            # --- Features update only at the start ---
 
-        subset_cols = ["user_id:token", "item_id:token", "timestamp:float"]
+            df = self.dataset_unrolled_cold_start.copy()
+            # Features pre-processing
+            df["age"] = df.get("age").map(self._simple_tokenize).fillna("")
+            df["race"] = df.get("race").map(self._simple_tokenize).fillna("")
+            df["education"] = df.get("education").map(self._simple_tokenize).fillna("")
+            df["income"] = df.get("income").map(self._simple_tokenize).fillna("")
+            df["gender"] = df.get("gender").astype(str).str.strip().str.title()
+            df.loc[~df["gender"].isin(["Male", "Female", "Other"]), "gender"] = "Other"
+            df["how_often_use_amazon"] = df.get("how_often_use_amazon").map(self._simple_tokenize).fillna("")
+            df["smoke_cigarettes"] = self._to_bool01(df.get("smoke_cigarettes")).fillna(0)
+            df["has_diabet"] = self._to_bool01(df.get("has_diabet")).fillna(0)
+            
+            if self.item_id_col == "item_id":
+                df["category"] = df.get("category").map(self._simple_tokenize).fillna("")
+                df["title"] = df.get("Title").map(self._simple_tokenize).fillna("")
 
-        users_ids = [inter["user_id"] for inter in new_interactions]
-        item_ids = [inter["item_id"] for inter in new_interactions]
-        timestamps = [inter["timestamp"] for inter in new_interactions]
+            df = df.loc[df["user_id"].isin(self.users_ids)
+                        & df["item_id"].isin(self.items_ids)].copy()
 
-        df_new_inter = pd.DataFrame({
-            "user_id:token": users_ids if len(new_interactions) > 1 else [users_ids],
-            "item_id:token": item_ids if len(new_interactions) > 1 else [item_ids],
-            "timestamp:float": timestamps if len(new_interactions) > 1 else [timestamps]
-        })
+            base_time_col = "timestamp" if "timestamp" in df.columns else "date"
+            df["__rome_date"], _ = self._rome_midnight_and_epoch(df[base_time_col])
 
-        # Define training set: old training plus old validation set
-        # Open training file
-        train_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part1.inter")
-        train_file_df = pd.read_csv(train_file, sep="\t")
-        # Open val file
-        val_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part2.inter")
-        val_file_df = pd.read_csv(val_file, sep="\t")
-        # Open test file
-        test_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part3.inter")
-        test_file_df = pd.read_csv(test_file, sep="\t")
+            # User features
+            user_feats = (
+                df.sort_values("__rome_date")
+                .drop_duplicates("user_id", keep="last")
+                .loc[:, ["user_id", "age", "race", "education", "income", "gender",
+                        "how_often_use_amazon", "smoke_cigarettes", "has_diabet"]]
+            )
+            user_feats = user_feats[user_feats["user_id"].isin(self.users_ids)]
 
-        train_file_df = pd.concat([train_file_df[subset_cols], val_file_df[subset_cols]], ignore_index=True)
-        val_file_df = test_file_df 
-        test_file_df = df_new_inter
+            user_df = user_feats.rename(columns={
+                "user_id": "user_id:token",
+                "age": "age:token",
+                "race": "race:token",
+                "education": "education:token",
+                "income": "income:token",
+                "gender": "gender:token",
+                "how_often_use_amazon": "how_often_use_amazon:token",
+                "smoke_cigarettes": "smoke_cigarettes:float",
+                "has_diabet": "has_diabet:float",
+            })
 
-        train_file_df[subset_cols].to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part1.inter"), index=False, sep='\t')
-        val_file_df[subset_cols].to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part2.inter"), index=False, sep='\t')
-        test_file_df[subset_cols].to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.part3.inter"), index=False, sep='\t')
-    
-    def update_actual_dataset(self):
-        """
-            Get the .inter files with the tmp model folder and define a new dataset with those files.
-            Also, re-init the model onto the dataset, training and evaluating it
-        """
+            # Item features
+            if self.item_id_col == "item_id":
+                item_feats = (
+                    df.sort_values("__rome_date")
+                    .drop_duplicates("item_id", keep="last")
+                    .loc[:, ["item_id", f"category", "title"]]
+                )
+                item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
 
-        try:
-            self.model_config = Config(model=self.model_name_recbole, dataset=f'experiment_dataset', config_dict=self.parameter_dict)
-        except Exception as e:
-            raise Exception(f"Error during the configuration of the model -> {e}")
-        try:
-            self.recbole_dataset = create_dataset(self.model_config)
+                item_df = item_feats.rename(columns={
+                    f"item_id": "item_id:token",
+                    f"category": "category:token",
+                    "title": "title:token_seq", 
+                })
+            elif self.item_id_col == "category":
+                item_feats = (
+                    df.sort_values("__rome_date")
+                    .drop_duplicates("item_id", keep="last")
+                    .loc[:, ["item_id"]]
+                )
+                item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
 
-            self.train_data, self.valid_data, self.test_data = data_preparation(config=self.model_config, dataset=self.recbole_dataset)
+                item_df = item_feats.rename(columns={
+                    f"item_id": "item_id:token",
+                })
 
-        except Exception as e:
-            raise Exception(f"Error during the initialization of the dataset -> {e}")
-        
+            user_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), index=False, sep='\t') 
+            item_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.item"), index=False, sep='\t') 
+
+            working_df = self.dataset_unrolled_cold_start.copy()
+
+            train_len = self.train_window_months
+
+            working_df["date"] = pd.to_datetime(working_df["date"], utc=True)
+            # To avoid some outlier errors
+            working_df["date"] = working_df["date"].dt.tz_convert("Europe/Rome").dt.normalize()
+
+            working_df["timestamp"] = (working_df["date"].astype("int64") // 10**9).astype(float)
+            working_df["month"] = working_df["date"].dt.to_period("M")
+
+            months = np.sort(working_df["month"].unique())
+            
+            train_start_idx = 0
+            train_end_idx = train_len - 3
+            val_idx  = train_end_idx + 1
+            test_idx = train_end_idx + 2
+
+            train_start = months[train_start_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+            train_end = months[train_end_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+            val_start = months[val_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+            val_end = months[val_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+            test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+            test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+
+            grouped = (
+                working_df
+                .groupby(["user_id", "item_id", "timestamp"], as_index=False)
+                .agg(
+                    interaction_count=("item_id", "size"),
+                    date=("date", "first"),
+                )
+            )
+            grouped["label"] = 1.0  # ! Use binary implicit positives !
+
+            # Masks
+            train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
+            val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
+            test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
+
+            # Headers
+            cols = [
+                "user_id:token", "item_id:token", "timestamp:float",
+                "label:float", "interaction_count:float", "date"
+            ]
+            print(grouped.head(10))
+            print(list(grouped.columns))
+            grouped = grouped.rename(columns={
+                "user_id": "user_id:token",
+                "item_id": "item_id:token",
+                "timestamp": "timestamp:float",
+                "label": "label:float",
+                "interaction_count": "interaction_count:float",
+            })
+
+            # Split frames
+            self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+            self.working_val_df = grouped.loc[val_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+            self.working_test_df = grouped.loc[test_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+
+            print(f"\n Train dates: {self.working_train_df.date.min()} - {self.working_train_df.date.max()} \n")
+            print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
+            print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
+
+            expanded_train = self._unroll_by_interaction_count(
+                df=self.working_train_df.drop(columns=["date"])
+            )
+            expanded_val = self._unroll_by_interaction_count(
+                df=self.working_val_df.drop(columns=["date"])
+            )
+            expanded_test = self._unroll_by_interaction_count(
+                df=self.working_test_df.drop(columns=["date"])
+            )
+
+            expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
+                                index=False, sep="\t")
+            expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
+                                index=False, sep="\t")
+            expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
+                                index=False, sep="\t")
+
+        else:
+            users_ids = [inter["user_id"] for inter in new_interactions]
+            item_ids = [inter["item_id"] for inter in new_interactions]
+            timestamps = [inter["timestamp"] for inter in new_interactions]
+
+            df_new_inter = pd.DataFrame({
+                "user_id:token": users_ids if len(new_interactions) > 1 else [users_ids],
+                "item_id:token": item_ids if len(new_interactions) > 1 else [item_ids],
+                "timestamp:float": timestamps if len(new_interactions) > 1 else [timestamps],
+            })
+
+            try: # They must exists because of k = 0
+                train_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.train.inter")
+                train_file_df = pd.read_csv(train_file, sep="\t")
+                # Open val file
+                val_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.val.inter")
+                val_file_df = pd.read_csv(val_file, sep="\t")
+                # Open test file
+                test_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.test.inter")
+                test_file_df = pd.read_csv(test_file, sep="\t")
+            except Exception as e:
+                raise(f"problem loading dataset file. Init recbole model function must run before")
+
+            working_df = pd.concat([train_file_df, val_file_df, test_file_df, df_new_inter], ignore_index=True)
+
+            working_df["date"] = (
+            pd.to_datetime(working_df["timestamp:float"].astype(float), unit="s", utc=True)
+                .dt.tz_convert("Europe/Rome")
+                .dt.normalize()
+            )
+
+            # Monthly buckets
+            working_df["month"] = working_df["date"].dt.to_period("M")
+            months = np.sort(working_df["month"].unique())
+
+            train_len = self.train_window_months
+            cold_start_len = self.config.cold_start_months
+            n_months_total = len(months)
+
+            if cold_start_len < 4:
+                raise Exception("\nNeed at least 4 months of initialization (>=2 train, 1 val, 1 test).")
+            
+            months_available = min(cold_start_len + k, n_months_total)
+
+            if months_available < 4:
+                raise Exception("Not enough months available to build train/val/test windows at this epoch.")
+
+            train_end_idx = months_available - 3
+            val_idx = train_end_idx + 1
+            test_idx = train_end_idx + 2
+
+            if self.use_all_data:
+                # Train on all months from the beginning
+                train_start_idx = 0
+            else:
+                # Fixed moving window of size `train_len` (in months)
+                if train_len is None or train_len <= 0:
+                    raise ValueError("train_window_months must be a positive integer when use_all_data=False.")
+                window = min(train_len, train_end_idx + 1)
+                train_start_idx = train_end_idx - window + 1
+
+            train_start = months[train_start_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+            train_end = months[train_end_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+            val_start = months[val_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+            val_end = months[val_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+            test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
+            test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
+
+            grouped = (
+                working_df
+                .groupby(["user_id:token", "item_id:token", "timestamp:float"], as_index=False)
+                .agg(
+                    interaction_count=("item_id:token", "size"),
+                    date=("date", "first"),
+                )
+            )
+            grouped["label:float"] = 1.0 
+            grouped["interaction_count:float"] = 1.0
+
+            # Masks
+            train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
+            val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
+            test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
+
+            cols = [
+                "user_id:token", "item_id:token", "timestamp:float",
+                "label:float", "interaction_count:float", "date"
+            ]
+
+            self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+            self.working_val_df   = grouped.loc[val_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+            self.working_test_df  = grouped.loc[test_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+
+            print(f"\n Train dates: {self.working_train_df.date.min()} - {self.working_train_df.date.max()} \n")
+            print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
+            print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
+
+            expanded_train = self._unroll_by_interaction_count(
+                df=self.working_train_df.drop(columns=["date"])
+            )
+            expanded_val = self._unroll_by_interaction_count(
+                df=self.working_val_df.drop(columns=["date"])
+            )
+            expanded_test = self._unroll_by_interaction_count(
+                df=self.working_test_df.drop(columns=["date"])
+            )
+
+            expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
+                                index=False, sep="\t")
+            expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
+                                index=False, sep="\t")
+            expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
+                                index=False, sep="\t")
+
     def init_choice_model(self) -> None:
         df_init = self.dataset_unrolled_cold_start.copy()
 
@@ -966,11 +896,8 @@ class AmazonECommerceFeedbackLoop():
                                 
                 timestamp_ = datetime.combine(date, time_datetime(hour=15))
                 recbole_timestamp = int(timestamp_.timestamp())
-                
+                start_users = time.time()
                 for user, items in valid_users.items():
-                    # Take only valid items
-                    # The occurences even for the same items are preserved
-                    # valid_items = [item for item in items if item in self.items_ids]
                     valid_items = items
                     
                     if len(valid_items) == 0:
@@ -1002,24 +929,23 @@ class AmazonECommerceFeedbackLoop():
                             "timestamp": recbole_timestamp,
                         }
                         epochs_interactions_df.append(single_interaction_df)
-            
-            start_update_dataset = time.time()
-            self.update_train_val_test(new_interactions=epochs_interactions_df, epoch=epoch)
-
-            self.user_choice_model.update(new_interactions=epochs_interactions_df, epoch=epoch)
-
-            end_update_dataset = time.time()
-            if (end_update_dataset - start_update_dataset) <= 60:
-                print(f"\n File dataset updates took {end_update_dataset - start_update_dataset} seconds \n")
-            else:
-                print(f"\n File dataset update took {(end_update_dataset - start_update_dataset)/60} minutes \n") 
-
+                end_users = time.time()
+                if (end_users - start_users) <= 60:
+                    print(f"\n Finished users new interactions in {end_users - start_users} seconds --- \n")
+                else:
+                    print(f"\n Finished users new interactions in {(end_users - start_users)/60} minutes --- \n")
             start_tr = time.time()
-            
             if (epoch % self.config.delta_training_epoch) == 0:
-                self.update_actual_dataset()
+                start_try = time.time()
+                self.user_choice_model.update(new_interactions=epochs_interactions_df, epoch=epoch)
+                self._build_window_for_epoch(k=epoch, new_interactions=epochs_interactions_df)
+                self.init_recbole_model()
+                end_try = time.time()
+                if (end_try - start_try) <= 60:
+                    print(f"\n Update - build window, init model finished in {end_try - start_try} seconds --- \n")
+                else:
+                    print(f"\n Update - build window, init model finished in {(end_try - start_try)/60} minutes --- \n")
 
-                # Keep training the SAME model (continues learning with new data)
                 trainer = Trainer(self.model_config, self.recbole_model)
 
                 # where to save per-simulation-epoch training logs
@@ -1039,6 +965,7 @@ class AmazonECommerceFeedbackLoop():
             if (len(epochs_interactions_df) == 0):
                 raise Exception(f"ZERO Interactions in epoch {epoch}")
             end_tr = time.time()
+
             if (end_tr - start_tr) <= 60:
                 print(f"\n Update, evaluation and training of the model elapsed in {end_tr - start_tr} seconds --- \n")
             else:

@@ -21,6 +21,8 @@ class AmazonECommerceDataset:
         self.dataset_filename = "amazon-purchases.csv"
         self.dataset_features_filename = "survey.csv"
 
+        self.item_level = self.config.item_level # must be a column within the dataframe
+
         if not os.path.exists(os.path.join(self.dataset_root_path, self.dataset_filename)):
             raise Exception(f"\n Dataset not found -> {os.path.join(self.dataset_root_path, self.dataset_filename)} does not exists \n")
 
@@ -90,16 +92,16 @@ class AmazonECommerceDataset:
                 df_dataset['Order Date'] = parsed
             
             df_dataset = df_dataset.sort_values('Order Date', na_position="last")
-
+            
             rename_dict = {
-                'Order Date': 'date',
-                'Purchase Price Per Unit': 'price_per_unit',
-                'Quantity': 'quantity',
-                'Shipping Address State': 'state',
-                'ASIN/ISBN (Product Code)': 'item_id',
-                'Category': 'category',
-                'Survey ResponseID': 'user_id'
-            }
+                    'Order Date': 'date',
+                    'Purchase Price Per Unit': 'price_per_unit',
+                    'Quantity': 'quantity',
+                    'Shipping Address State': 'state',
+                    'Survey ResponseID': 'user_id',
+                    'Category': 'category',
+                    "ASIN/ISBN (Product Code)": 'item_id'
+                }
 
             df_dataset = df_dataset.rename(columns=rename_dict)
 
@@ -118,47 +120,6 @@ class AmazonECommerceDataset:
 
         else:
             self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path, index_col=0)
-
-    # def setup(self) -> None:
-    #     if not self.config.use_cache or not os.path.exists(self.unrolled_dataset_total_path):
-    #         df_original = pd.read_csv(os.path.join(self.dataset_root_path, self.dataset_filename), sep=",", low_memory=False)
-    #         # Clean up
-    #         nan_columns = ['Order Date', 'Quantity', 'Shipping Address State', 'ASIN/ISBN (Product Code)', 'Category', 'Survey ResponseID']
-    #         df_filtered = df_original.dropna(subset=nan_columns)
-    #         df_filtered = df_filtered.sort_values('Order Date')
-
-    #         # By default use category of the items as item_it
-    #         rename_dict = {
-    #             'Order Date': 'date',
-    #             'Purchase Price Per Unit': 'price_per_unit',
-    #             'Quantity': 'quantity',
-    #             'Shipping Address State': 'state',
-    #             'ASIN/ISBN (Product Code)': 'aisin',
-    #             'Category': 'item_id', # GROUP BY CATEGORY
-    #             'Survey ResponseID': 'user_id'
-    #         }
-
-    #         df_filtered = df_filtered.rename(columns=rename_dict)
-
-    #         # Unroll to be sure about implicit feedback format
-    #         new_working_df = []
-    #         for _, row in df_filtered.iterrows():
-    #             for _ in range(int(row['quantity'])):
-    #                 new_row = row
-    #                 new_row["quantity"] = 1
-    #                 new_working_df.append(new_row)
-            
-    #         self.unrolled_dataset_total = pd.DataFrame(new_working_df, columns=df_filtered.columns)
-    #         self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path)
-
-    #     elif self.config.use_cache and os.path.exists(self.unrolled_dataset_total_path):
-    #         self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path)
-    #     else:
-    #         raise Exception(f"\n Cache not found -> {self.unrolled_dataset_total_path} \n")
-        
-    #     # Set up dataframe to be used for the simulation from now on
-    #     self.unrolled_dataset_total = self.unrolled_dataset_total[['user_id', 'item_id', 'date']]
-    #     self.unrolled_dataset_total['date'] = pd.to_datetime(self.unrolled_dataset_total['date'], format="%Y-%m-%d")
 
     def real_dataset_save_cache(self, start_date: datetime, end_date: datetime, users: list, items: list):
         """

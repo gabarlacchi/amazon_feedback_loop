@@ -82,7 +82,8 @@ def main(args: argparse):
                 feedback_loop_tool.init_experiment()
 
                 # Define training-validation-test set for the recom. models
-                _ = feedback_loop_tool.init_recbole_dataset()
+                # _ = feedback_loop_tool.init_recbole_dataset()
+                feedback_loop_tool._build_window_for_epoch(k=0, new_interactions=None)
                 # Traing and set up RecBole system
                 feedback_loop_tool.init_recbole_model()
 
