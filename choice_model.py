@@ -20,6 +20,8 @@ class ChoiceModel():
         
         self.df = interaction_df
 
+        self.df = self.df[["user_id", "item_id", "date", "timestamp"]]
+
         self.user_col = user_col
         self.item_col = item_col
         self.time_col = timestamp_col
@@ -412,31 +414,69 @@ class ChoiceModel():
     def update(self, new_interactions, epoch):
         new_df = pd.DataFrame(new_interactions)
         new_df[self.time_col] = pd.to_datetime(new_df[self.time_col])
-        new_df['year_month'] = new_df[self.time_col].dt.to_period('M')
-        
-        new_df = new_df[["user_id", "item_id", "date", "timestamp"]]
-        df = pd.concat([self.df, new_df], ignore_index=True)
-        df = df.sort_values(self.time_col).reset_index(drop=True)
 
-        self.df = df # The main is updated with new interactions
+        new_df = new_df[["user_id", "item_id", "date", "timestamp"]]
+
+        self.df = pd.concat([self.df, new_df], ignore_index=True).sort_values(
+            self.time_col
+        ).reset_index(drop=True)
 
         if self.results_path is None:
-            raise Exception(f"The choice model has no access to results folder")
-
-        # Candidate set items
+            raise Exception("The choice model has no access to results folder")
+        
         candidate_sets = self.candidate_set_items(df=self.df)
-        target_folder = os.path.join(self.results_path, "candidate_set_items")
-        if not os.path.exists(target_folder):
-            os.makedirs(target_folder)
-        candidate_sets.to_csv(os.path.join(target_folder, f"epoch_{epoch}.csv"), index=False)
+        # UNCOMMENT IF YOU WANT TOSAVE UTILITIES AND CANDIDATE SETS OVER TIME
 
-        # Utilities
+        # target_folder = os.path.join(self.results_path, "candidate_set_items")
+        # os.makedirs(target_folder, exist_ok=True)
+
+        # candidate_sets.to_csv(
+        #     os.path.join(target_folder, f"epoch_{epoch}.csv"), 
+        #     index=False
+        # )
+
         utilities_users = self.compute_utilities_v2(df=self.df, candidate_sets=candidate_sets)
-        target_folder = os.path.join(self.results_path, "utilities_users")
-        if not os.path.exists(target_folder):
-            os.makedirs(target_folder)
-        utilities_users.to_csv(os.path.join(target_folder, f"epoch_{epoch}.csv"), index=False)
+        # target_folder = os.path.join(self.results_path, "utilities_users")
+        # os.makedirs(target_folder, exist_ok=True)
+        # utilities_users.to_csv(
+        #     os.path.join(target_folder, f"epoch_{epoch}.csv"), 
+        #     index=False
+        # )
 
-        # self.exploration_rate_users = results
         self.candidate_sets = candidate_sets
         self.utilities_users = utilities_users
+
+
+
+
+
+        # new_df = pd.DataFrame(new_interactions)
+        # new_df[self.time_col] = pd.to_datetime(new_df[self.time_col])
+        # new_df['year_month'] = new_df[self.time_col].dt.to_period('M')
+        
+        # new_df = new_df[["user_id", "item_id", "date", "timestamp"]]
+        # df = pd.concat([self.df, new_df], ignore_index=True)
+        # df = df.sort_values(self.time_col).reset_index(drop=True)
+
+        # self.df = df # The main is updated with new interactions
+
+        # if self.results_path is None:
+        #     raise Exception(f"The choice model has no access to results folder")
+
+        # # Candidate set items
+        # candidate_sets = self.candidate_set_items(df=self.df)
+        # target_folder = os.path.join(self.results_path, "candidate_set_items")
+        # if not os.path.exists(target_folder):
+        #     os.makedirs(target_folder)
+        # candidate_sets.to_csv(os.path.join(target_folder, f"epoch_{epoch}.csv"), index=False)
+
+        # # Utilities
+        # utilities_users = self.compute_utilities_v2(df=self.df, candidate_sets=candidate_sets)
+        # target_folder = os.path.join(self.results_path, "utilities_users")
+        # if not os.path.exists(target_folder):
+        #     os.makedirs(target_folder)
+        # utilities_users.to_csv(os.path.join(target_folder, f"epoch_{epoch}.csv"), index=False)
+
+        # # self.exploration_rate_users = results
+        # self.candidate_sets = candidate_sets
+        # self.utilities_users = utilities_users

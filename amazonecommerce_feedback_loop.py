@@ -416,6 +416,7 @@ class AmazonECommerceFeedbackLoop():
             # --- Features update only at the start ---
 
             df = self.dataset_unrolled_cold_start.copy()
+
             # Features pre-processing
             df["age"] = df.get("age").map(self._simple_tokenize).fillna("")
             df["race"] = df.get("race").map(self._simple_tokenize).fillna("")
@@ -436,6 +437,15 @@ class AmazonECommerceFeedbackLoop():
 
             base_time_col = "timestamp" if "timestamp" in df.columns else "date"
             df["__rome_date"], _ = self._rome_midnight_and_epoch(df[base_time_col])
+
+            categorical_cols = ["user_id", "item_id", "age", "race", "education", 
+                                "income", "gender", "how_often_use_amazon"]
+            if self.item_id_col == "item_id":
+                categorical_cols.extend(["category"])  # Don't convert 'title' as it's a sequence
+
+            for col in categorical_cols:
+                if col in df.columns:
+                    df[col] = df[col].astype('category')
 
             # User features
             user_feats = (
@@ -489,10 +499,12 @@ class AmazonECommerceFeedbackLoop():
 
             working_df = self.dataset_unrolled_cold_start.copy()
 
+            working_df["user_id"] = working_df["user_id"].astype('category')
+            working_df["item_id"] = working_df["item_id"].astype('category')
+
             train_len = self.train_window_months
 
             working_df["date"] = pd.to_datetime(working_df["date"], utc=True)
-            # To avoid some outlier errors
             working_df["date"] = working_df["date"].dt.tz_convert("Europe/Rome").dt.normalize()
 
             working_df["timestamp"] = (working_df["date"].astype("int64") // 10**9).astype(float)
@@ -512,28 +524,51 @@ class AmazonECommerceFeedbackLoop():
             test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
             test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
 
-            grouped = (
-                working_df
-                .groupby(["user_id", "item_id", "timestamp"], as_index=False)
-                .agg(
-                    interaction_count=("item_id", "size"),
-                    date=("date", "first"),
-                )
+            # grouped = (
+            #     working_df
+            #     .groupby(["user_id", "item_id", "timestamp"], as_index=False)
+            #     .agg(
+            #         interaction_count=("item_id", "size"),
+            #         date=("date", "first"),
+            #     )
+            # )
+            # grouped["label"] = 1.0
+
+            grp = working_df.groupby(["user_id", "item_id", "timestamp"], as_index=False, observed=True)
+            grouped_counts = grp.size().rename(columns={"size": "interaction_count"})
+            grouped_dates = grp["date"].first().reset_index()
+            grouped_dates = grouped_dates.rename(columns={"date": "date"})
+            grouped = grouped_counts.merge(
+                grouped_dates,
+                on=["user_id", "item_id", "timestamp"],
+                how="inner",
             )
-            grouped["label"] = 1.0  # ! Use binary implicit positives !
+            grouped["label"] = 1.0
+
+            cols = [
+                "user_id:token", "item_id:token", "timestamp:float",
+                "label:float", "interaction_count:float", "date"
+            ]
+
+            grouped = grouped.rename(columns={
+                "user_id": "user_id:token",
+                "item_id": "item_id:token",
+                "timestamp": "timestamp:float",
+                "label": "label:float",
+                "interaction_count": "interaction_count:float",
+            })
+            
 
             # Masks
             train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
-            val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
-            test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
+            val_mask = grouped["date"].between(val_start, val_end, inclusive="both")
+            test_mask = grouped["date"].between(test_start, test_end, inclusive="both")
 
             # Headers
             cols = [
                 "user_id:token", "item_id:token", "timestamp:float",
                 "label:float", "interaction_count:float", "date"
             ]
-            print(grouped.head(10))
-            print(list(grouped.columns))
             grouped = grouped.rename(columns={
                 "user_id": "user_id:token",
                 "item_id": "item_id:token",
@@ -567,31 +602,44 @@ class AmazonECommerceFeedbackLoop():
                                 index=False, sep="\t")
             expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
                                 index=False, sep="\t")
+            
+            self._cached_historical_df = pd.concat([expanded_train, expanded_val, expanded_test], ignore_index=True)
 
         else:
             users_ids = [inter["user_id"] for inter in new_interactions]
             item_ids = [inter["item_id"] for inter in new_interactions]
             timestamps = [inter["timestamp"] for inter in new_interactions]
 
+            # df_new_inter = pd.DataFrame({
+            #     "user_id:token": users_ids if len(new_interactions) > 1 else [users_ids],
+            #     "item_id:token": item_ids if len(new_interactions) > 1 else [item_ids],
+            #     "timestamp:float": timestamps if len(new_interactions) > 1 else [timestamps],
+            # })
+
             df_new_inter = pd.DataFrame({
-                "user_id:token": users_ids if len(new_interactions) > 1 else [users_ids],
-                "item_id:token": item_ids if len(new_interactions) > 1 else [item_ids],
-                "timestamp:float": timestamps if len(new_interactions) > 1 else [timestamps],
+                "user_id:token": users_ids,
+                "item_id:token": item_ids,
+                "timestamp:float": timestamps,
             })
 
-            try: # They must exists because of k = 0
-                train_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.train.inter")
-                train_file_df = pd.read_csv(train_file, sep="\t")
-                # Open val file
-                val_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.val.inter")
-                val_file_df = pd.read_csv(val_file, sep="\t")
-                # Open test file
-                test_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.test.inter")
-                test_file_df = pd.read_csv(test_file, sep="\t")
-            except Exception as e:
-                raise(f"problem loading dataset file. Init recbole model function must run before")
+            # try: # They must exists because of k = 0
+            #     train_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.train.inter")
+            #     train_file_df = pd.read_csv(train_file, sep="\t")
+            #     # Open val file
+            #     val_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.val.inter")
+            #     val_file_df = pd.read_csv(val_file, sep="\t")
+            #     # Open test file
+            #     test_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.test.inter")
+            #     test_file_df = pd.read_csv(test_file, sep="\t")
+            # except Exception as e:
+            #     raise(f"problem loading dataset file. Init recbole model function must run before")
 
-            working_df = pd.concat([train_file_df, val_file_df, test_file_df, df_new_inter], ignore_index=True)
+            if not hasattr(self, '_cached_historical_df'):
+                raise Exception("Historical data not initialized. Run with k=0 first.")
+
+            working_df = pd.concat([self._cached_historical_df, df_new_inter], ignore_index=True)
+
+            # working_df = pd.concat([train_file_df, val_file_df, test_file_df, df_new_inter], ignore_index=True)
 
             working_df["date"] = (
             pd.to_datetime(working_df["timestamp:float"].astype(float), unit="s", utc=True)
@@ -636,16 +684,38 @@ class AmazonECommerceFeedbackLoop():
             test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
             test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
 
-            grouped = (
-                working_df
-                .groupby(["user_id:token", "item_id:token", "timestamp:float"], as_index=False)
-                .agg(
-                    interaction_count=("item_id:token", "size"),
-                    date=("date", "first"),
-                )
+            # grouped = (
+            #     working_df
+            #     .groupby(["user_id:token", "item_id:token", "timestamp:float"], as_index=False)
+            #     .agg(
+            #         interaction_count=("item_id:token", "size"),
+            #         date=("date", "first"),
+            #     )
+            # )
+            # grouped["label:float"] = 1.0 
+            # grouped["interaction_count:float"] = 1.0
+
+            
+
+            grp_inc = working_df.groupby(
+                ["user_id:token", "item_id:token", "timestamp:float"],
+                as_index=False,
             )
-            grouped["label:float"] = 1.0 
-            grouped["interaction_count:float"] = 1.0
+            grouped_counts_inc = grp_inc.size().rename(columns={"size": "interaction_count"})
+            grouped_dates_inc = grp_inc["date"].first().reset_index()
+            grouped = grouped_counts_inc.merge(
+                grouped_dates_inc,
+                on=["user_id:token", "item_id:token", "timestamp:float"],
+                how="inner",
+            )
+            grouped["label:float"] = 1.0
+            grouped["interaction_count:float"] = grouped["interaction_count"].astype(float)
+
+            cols = [
+                "user_id:token", "item_id:token", "timestamp:float",
+                "label:float", "interaction_count:float", "date"
+            ]
+            grouped = grouped[cols]
 
             # Masks
             train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
@@ -681,6 +751,8 @@ class AmazonECommerceFeedbackLoop():
                                 index=False, sep="\t")
             expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
                                 index=False, sep="\t")
+            
+            self._cached_historical_df = pd.concat([expanded_train, expanded_val, expanded_test], ignore_index=True)
 
     def init_choice_model(self) -> None:
         df_init = self.dataset_unrolled_cold_start.copy()
@@ -698,7 +770,8 @@ class AmazonECommerceFeedbackLoop():
         probs = probs / probs.sum()
         sampled_index = int(self.rng.choice(len(items), p=probs))
         selected_item_id = items[sampled_index]
-        item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, selected_item_id)
+
+        item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, str(selected_item_id))
         return item_id_recbole
 
     def _fit_with_tracking(self, trainer: Trainer, save_stem: str, show_progress: bool = False, save_plots: bool = False):
@@ -896,7 +969,7 @@ class AmazonECommerceFeedbackLoop():
                                 
                 timestamp_ = datetime.combine(date, time_datetime(hour=15))
                 recbole_timestamp = int(timestamp_.timestamp())
-                start_users = time.time()
+
                 for user, items in valid_users.items():
                     valid_items = items
                     
@@ -906,41 +979,61 @@ class AmazonECommerceFeedbackLoop():
                     user_id_recbole = self.recbole_dataset.token2id(self.recbole_dataset.uid_field, user)
 
                     use_recommender_mask = (self.rng.random(basket_size) < p)
+                    
+                    n_recommender = np.sum(use_recommender_mask)
+                    n_choice = basket_size - n_recommender
+                    
+                    recommender_items = []
+                    if n_recommender > 0:
+                        for _ in range(n_recommender):
+                            recbole_item_id = self.recom_recbole_model(curr_epoch=epoch, user_id_recbole=user_id_recbole, K_horizon=k_horizon)
+                            recommender_items.append(recbole_item_id)
+                    
+                    choice_items = []
+                    if n_choice > 0:
+                        if self.config.user_strategy["model_name"] == "Custom choice model":
+                            for _ in range(n_choice):
+                                recbole_item_id = self.recom_choice_model(curr_epoch=epoch, user_id_recbole=user_id_recbole)
+                                choice_items.append(recbole_item_id)
+                        else:
+                            raise Exception(f"\n Only choice model is supported")
+                        
+                    rec_iter = iter(recommender_items)
+                    choice_iter = iter(choice_items)
 
                     for use_rec in use_recommender_mask:
                         if use_rec:
-                            recbole_item_id = self.recom_recbole_model(curr_epoch=epoch, user_id_recbole=user_id_recbole, K_horizon=k_horizon)
+                            recbole_item_id = next(rec_iter)
                         else:
-                            if self.config.user_strategy["model_name"] == "Custom choice model":
-                                recbole_item_id = self.recom_choice_model(curr_epoch=epoch, user_id_recbole=user_id_recbole)
-                            else:
-                                raise Exception(f"\n Only choice model is supported")
-                        if recbole_item_id == 0:
-                            print(f"\n --- Recommendation not found for user: {user_id_recbole} --- \n")
-                            print(f"\n --- The item suggested was the 0 (PAD) --- \n")
-                            continue
-
-                        our_item_id = self.recbole_dataset.id2token(self.recbole_dataset.iid_field, recbole_item_id)
+                            recbole_item_id = next(choice_iter)
                         
                         single_interaction_df = {
                             "user_id": user,
-                            "item_id": our_item_id,
+                            "item_id": recbole_item_id,
                             "date": date,
                             "timestamp": recbole_timestamp,
                         }
                         epochs_interactions_df.append(single_interaction_df)
-                end_users = time.time()
-                if (end_users - start_users) <= 60:
-                    print(f"\n Finished users new interactions in {end_users - start_users} seconds --- \n")
-                else:
-                    print(f"\n Finished users new interactions in {(end_users - start_users)/60} minutes --- \n")
-            start_tr = time.time()
+
             if (epoch % self.config.delta_training_epoch) == 0:
                 start_try = time.time()
+                st1 = time.time()
                 self.user_choice_model.update(new_interactions=epochs_interactions_df, epoch=epoch)
+                end1 = time.time()
+                st2 = time.time()
                 self._build_window_for_epoch(k=epoch, new_interactions=epochs_interactions_df)
+                end2 = time.time()
+                st3 = time.time()
                 self.init_recbole_model()
+                end3 = time.time()
                 end_try = time.time()
+
+                print(f"\n UPDATE finished in {end1 - st1} seconds --- \n")
+
+                print(f"\n BUILD WINDOW finished in {end2 - st2} seconds --- \n")
+
+                print(f"\n INIT MODEL finished in {end3 - st3} seconds --- \n")
+
                 if (end_try - start_try) <= 60:
                     print(f"\n Update - build window, init model finished in {end_try - start_try} seconds --- \n")
                 else:
@@ -953,23 +1046,22 @@ class AmazonECommerceFeedbackLoop():
                 if not os.path.exists(trainlogs_root):
                     os.makedirs(trainlogs_root)
                 save_stem = os.path.join(trainlogs_root, f"sim_epoch_{epoch}")
-
+                start_fit = time.time()
                 # re-training strategy
                 self._fit_with_tracking(
-                        trainer=trainer,
-                        save_stem=save_stem,
-                        show_progress=False,
-                        save_plots=False 
-                    )
+                    trainer=trainer,
+                    save_stem=save_stem,
+                    show_progress=False,
+                    save_plots=False 
+                )
+                end_fit = time.time()
+                if (end_fit - start_fit) <= 60:
+                    print(f"\n Fit with track finished in {end_fit - start_fit} seconds --- \n")
+                else:
+                    print(f"\n Fit with track finished in {(end_fit - start_fit)/60} minutes --- \n")
 
             if (len(epochs_interactions_df) == 0):
                 raise Exception(f"ZERO Interactions in epoch {epoch}")
-            end_tr = time.time()
-
-            if (end_tr - start_tr) <= 60:
-                print(f"\n Update, evaluation and training of the model elapsed in {end_tr - start_tr} seconds --- \n")
-            else:
-                print(f"\n Update, evaluation and training of the model elapsed in {(end_tr - start_tr)/60} minutes --- \n")
             
             end_e = time.time()
             

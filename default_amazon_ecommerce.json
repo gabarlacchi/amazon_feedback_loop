@@ -9,7 +9,7 @@
     "use_cache": true,
     "recommender_model": {
         "model_name": "CF_KNN_item",
-        "epochs": 10,
+        "epochs": 1,
         "k": 200,
         "shrink": 3
     },
