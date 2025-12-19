@@ -210,10 +210,13 @@ class AmazonECommerceFeedbackLoop():
             "BPR": "BPR",
             "LightGCN": "LightGCN",
             "SpectralCF": "SpectralCF",
+            "NGCF":"NGCF",
+            "SGL": "SGL",
+            "EASE": "EASE",
             "NeuMF": "NeuMF",
             "DeepFM": "DeepFM", 
             "xDeepFM": "xDeepFM",
-            "DCN V2": "DCNv2"
+            "DCNV2": "DCNV2"
         }
         try:
             self.raw_model_name = self.config.recommender_model.model_name
@@ -264,12 +267,13 @@ class AmazonECommerceFeedbackLoop():
                 self.parameter_dict[key or attr] = getattr(model_cfg, attr)
         
         add_if("learning_rate", "learning_rate")
+        add_if("epochs", "epochs")
 
         if self.model_name_recbole == "ItemKNN":
             add_if("k", "k")
             add_if("shrink", "shrink")
-            self.parameter_dict.setdefault("similarity", "cosine")
-            self.parameter_dict.setdefault("normalize", True)
+            # self.parameter_dict.setdefault("similarity", "cosine")
+            # self.parameter_dict.setdefault("normalize", True)
         elif self.model_name_recbole == "BPR":
             add_if("reg_weight", "reg_weight")
         elif self.model_name_recbole == "LightGCN":
@@ -280,59 +284,57 @@ class AmazonECommerceFeedbackLoop():
             add_if("user_embedding_size", "mlp_embedding_size")
             add_if("item_embedding_size", "mf_embedding_size")
         elif self.model_name_recbole == "MultiVAE":
-            add_if("user_hidden_size_list", "user_hidden_size_list")
+            add_if("mlp_hidden_size", "mlp_hidden_size")
             add_if("dropout_prob", "dropout_prob")
-            self.parameter_dict.setdefault("latent_dim", 50)
+            add_if("latent_dimension", "latent_dimension")
         elif self.model_name_recbole == "SpectralCF":
             add_if("n_layers", "n_layers")
             add_if("reg_weight", "reg_weight")
-        elif self.model_name_recbole == "DeepFM":
-            self.parameter_dict.setdefault("embedding_size", 16)
-            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
-            self.parameter_dict.setdefault("dropout_prob", 0.2)
-            self.parameter_dict.setdefault("reg_weight", 1e-6)
+        elif self.model_name_recbole == "NGCF":
             add_if("embedding_size")
-            add_if("mlp_hidden_size")
-            add_if("dropout_prob")
+            add_if("hidden_size_list")
+            add_if("node_dropout")
+            add_if("message_dropout")
             add_if("reg_weight")
-
+        elif self.model_name_recbole == "SGL":
+            add_if("embedding_size")
+            add_if("n_layers")
+            add_if("reg_weight")
+            add_if("ssl_tau")
+            add_if("ssl_weight")
+            add_if("drop_ratio")
+            add_if("type")
+        elif self.model_name_recbole == "EASE":
+            add_if("reg_weight")
         elif self.model_name_recbole == "DeepFM":
             # FM (second-order) + MLP over concatenated embeddings
-            self.parameter_dict.setdefault("embedding_size", 16)
-            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
-            self.parameter_dict.setdefault("dropout_prob", 0.2)
-            self.parameter_dict.setdefault("reg_weight", 1e-6)
             add_if("embedding_size")
             add_if("mlp_hidden_size")
             add_if("dropout_prob")
-            add_if("reg_weight")
 
         elif self.model_name_recbole == "xDeepFM":
             # CIN (explicit higher-order) + MLP (implicit) + linear/FMs
-            self.parameter_dict.setdefault("embedding_size", 16)
-            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
-            self.parameter_dict.setdefault("cin_layer_size", [16, 16])
-            self.parameter_dict.setdefault("dropout_prob", 0.2)
-            self.parameter_dict.setdefault("reg_weight", 1e-6)
             add_if("embedding_size")
             add_if("mlp_hidden_size")
-            add_if("cin_layer_size")
             add_if("dropout_prob")
             add_if("reg_weight")
+            add_if("cin_layer_size")
+            add_if("direct")
 
-        elif self.model_name_recbole == "DCNv2":
+        elif self.model_name_recbole == "DCNV2":
             # Cross network v2 + deep MLP
-            self.parameter_dict.setdefault("embedding_size", 16)
-            self.parameter_dict.setdefault("mlp_hidden_size", [256, 128])
-            self.parameter_dict.setdefault("cross_layer_num", 3)   # number of cross layers
-            # low_rank and num_experts are optional in some RecBole versions of DCNv2
             add_if("embedding_size")
-            add_if("mlp_hidden_size")
             add_if("cross_layer_num")
+            add_if("mlp_hidden_size")
+            add_if("dropout_prob")
+            add_if("reg_weight")
+            add_if("structure")
+            add_if("mixed")
+            add_if("expert_num")
             add_if("low_rank")
-            add_if("num_experts")
 
-        add_if("epochs", "epochs")
+            
+            
 
         # Remove None
         self.parameter_dict = {k: v for k, v in self.parameter_dict.items() if v is not None}
@@ -606,50 +608,50 @@ class AmazonECommerceFeedbackLoop():
             self._cached_historical_df = pd.concat([expanded_train, expanded_val, expanded_test], ignore_index=True)
 
         else:
-            users_ids = [inter["user_id"] for inter in new_interactions]
-            item_ids = [inter["item_id"] for inter in new_interactions]
-            timestamps = [inter["timestamp"] for inter in new_interactions]
 
-            # df_new_inter = pd.DataFrame({
-            #     "user_id:token": users_ids if len(new_interactions) > 1 else [users_ids],
-            #     "item_id:token": item_ids if len(new_interactions) > 1 else [item_ids],
-            #     "timestamp:float": timestamps if len(new_interactions) > 1 else [timestamps],
-            # })
+            filtered_interactions = [
+                inter for inter in new_interactions 
+                if inter["user_id"] in self.users_ids and inter["item_id"] in self.items_ids
+            ]
+            if not filtered_interactions:
+                print(f"Warning: No valid interactions after filtering at epoch {k}")
 
             df_new_inter = pd.DataFrame({
-                "user_id:token": users_ids,
-                "item_id:token": item_ids,
-                "timestamp:float": timestamps,
+                "user_id:token": [inter["user_id"] for inter in filtered_interactions],
+                "item_id:token": [inter["item_id"] for inter in filtered_interactions],
+                "timestamp:float": [inter["timestamp"] for inter in filtered_interactions],
             })
 
-            # try: # They must exists because of k = 0
-            #     train_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.train.inter")
-            #     train_file_df = pd.read_csv(train_file, sep="\t")
-            #     # Open val file
-            #     val_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.val.inter")
-            #     val_file_df = pd.read_csv(val_file, sep="\t")
-            #     # Open test file
-            #     test_file = os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.test.inter")
-            #     test_file_df = pd.read_csv(test_file, sep="\t")
-            # except Exception as e:
-            #     raise(f"problem loading dataset file. Init recbole model function must run before")
+            # df_new_inter = pd.DataFrame({
+            #     "user_id:token": [inter["user_id"] for inter in new_interactions],
+            #     "item_id:token": [inter["item_id"] for inter in new_interactions],
+            #     "timestamp:float": [inter["timestamp"] for inter in new_interactions],
+            # })
 
             if not hasattr(self, '_cached_historical_df'):
                 raise Exception("Historical data not initialized. Run with k=0 first.")
 
             working_df = pd.concat([self._cached_historical_df, df_new_inter], ignore_index=True)
-
-            # working_df = pd.concat([train_file_df, val_file_df, test_file_df, df_new_inter], ignore_index=True)
+            working_df["user_id:token"] = working_df["user_id:token"].astype("category")
+            working_df["item_id:token"] = working_df["item_id:token"].astype("category")
 
             working_df["date"] = (
-            pd.to_datetime(working_df["timestamp:float"].astype(float), unit="s", utc=True)
+                pd.to_datetime(working_df["timestamp:float"], unit="s", utc=True)
                 .dt.tz_convert("Europe/Rome")
                 .dt.normalize()
             )
 
-            # Monthly buckets
             working_df["month"] = working_df["date"].dt.to_period("M")
-            months = np.sort(working_df["month"].unique())
+            months = working_df["month"].unique()
+            months = np.sort(months)
+
+            # !!
+            max_months_to_keep = 12
+
+            if len(months) > max_months_to_keep:
+                cutoff_month = months[-max_months_to_keep]
+                working_df = working_df[working_df["month"] >= cutoff_month].copy()
+                months = months[-max_months_to_keep:]
 
             train_len = self.train_window_months
             cold_start_len = self.config.cold_start_months
@@ -657,21 +659,18 @@ class AmazonECommerceFeedbackLoop():
 
             if cold_start_len < 4:
                 raise Exception("\nNeed at least 4 months of initialization (>=2 train, 1 val, 1 test).")
-            
             months_available = min(cold_start_len + k, n_months_total)
 
             if months_available < 4:
                 raise Exception("Not enough months available to build train/val/test windows at this epoch.")
-
+            
             train_end_idx = months_available - 3
             val_idx = train_end_idx + 1
             test_idx = train_end_idx + 2
 
             if self.use_all_data:
-                # Train on all months from the beginning
                 train_start_idx = 0
             else:
-                # Fixed moving window of size `train_len` (in months)
                 if train_len is None or train_len <= 0:
                     raise ValueError("train_window_months must be a positive integer when use_all_data=False.")
                 window = min(train_len, train_end_idx + 1)
@@ -684,30 +683,16 @@ class AmazonECommerceFeedbackLoop():
             test_start = months[test_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
             test_end = months[test_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
 
-            # grouped = (
-            #     working_df
-            #     .groupby(["user_id:token", "item_id:token", "timestamp:float"], as_index=False)
-            #     .agg(
-            #         interaction_count=("item_id:token", "size"),
-            #         date=("date", "first"),
-            #     )
-            # )
-            # grouped["label:float"] = 1.0 
-            # grouped["interaction_count:float"] = 1.0
-
-            
-
-            grp_inc = working_df.groupby(
+            grouped = working_df.groupby(
                 ["user_id:token", "item_id:token", "timestamp:float"],
                 as_index=False,
-            )
-            grouped_counts_inc = grp_inc.size().rename(columns={"size": "interaction_count"})
-            grouped_dates_inc = grp_inc["date"].first().reset_index()
-            grouped = grouped_counts_inc.merge(
-                grouped_dates_inc,
-                on=["user_id:token", "item_id:token", "timestamp:float"],
-                how="inner",
-            )
+                sort=False,
+                observed=True
+            ).agg({
+                "date": "first",
+                "month": "size"
+            }).rename(columns={"month": "interaction_count"})
+
             grouped["label:float"] = 1.0
             grouped["interaction_count:float"] = grouped["interaction_count"].astype(float)
 
@@ -717,42 +702,57 @@ class AmazonECommerceFeedbackLoop():
             ]
             grouped = grouped[cols]
 
-            # Masks
             train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
-            val_mask   = grouped["date"].between(val_start, val_end, inclusive="both")
-            test_mask  = grouped["date"].between(test_start, test_end, inclusive="both")
+            val_mask = grouped["date"].between(val_start, val_end, inclusive="both")
+            test_mask = grouped["date"].between(test_start, test_end, inclusive="both")
 
-            cols = [
-                "user_id:token", "item_id:token", "timestamp:float",
-                "label:float", "interaction_count:float", "date"
-            ]
-
-            self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
-            self.working_val_df   = grouped.loc[val_mask, cols].sort_values(["user_id:token", "timestamp:float"])
-            self.working_test_df  = grouped.loc[test_mask, cols].sort_values(["user_id:token", "timestamp:float"])
+            self.working_train_df = (
+                grouped.loc[train_mask, cols]
+                .sort_values(["user_id:token", "timestamp:float"], ignore_index=True)
+            )
+            self.working_val_df = (
+                grouped.loc[val_mask, cols]
+                .sort_values(["user_id:token", "timestamp:float"], ignore_index=True)
+            )
+            self.working_test_df = (
+                grouped.loc[test_mask, cols]
+                .sort_values(["user_id:token", "timestamp:float"], ignore_index=True)
+            )
 
             print(f"\n Train dates: {self.working_train_df.date.min()} - {self.working_train_df.date.max()} \n")
             print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
             print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
 
-            expanded_train = self._unroll_by_interaction_count(
-                df=self.working_train_df.drop(columns=["date"])
+            # expanded_train = self._unroll_by_interaction_count(
+            #     df=self.working_train_df.drop(columns=["date"])
+            # )
+            # expanded_val = self._unroll_by_interaction_count(
+            #     df=self.working_val_df.drop(columns=["date"])
+            # )
+            # expanded_test = self._unroll_by_interaction_count(
+            #     df=self.working_test_df.drop(columns=["date"])
+            # )
+
+            self.working_train_df.drop(columns=["date"]).to_csv(
+                os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
+                index=False, 
+                sep="\t"
             )
-            expanded_val = self._unroll_by_interaction_count(
-                df=self.working_val_df.drop(columns=["date"])
+            self.working_val_df.drop(columns=["date"]).to_csv(
+                os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
+                index=False, 
+                sep="\t"
             )
-            expanded_test = self._unroll_by_interaction_count(
-                df=self.working_test_df.drop(columns=["date"])
+            self.working_test_df.drop(columns=["date"]).to_csv(
+                os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
+                index=False, 
+                sep="\t"
             )
 
-            expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
-                                index=False, sep="\t")
-            expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
-                                index=False, sep="\t")
-            expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
-                                index=False, sep="\t")
-            
-            self._cached_historical_df = pd.concat([expanded_train, expanded_val, expanded_test], ignore_index=True)
+            self._cached_historical_df = pd.concat(
+                [self.working_train_df, self.working_val_df, self.working_test_df], 
+                ignore_index=True
+            )
 
     def init_choice_model(self) -> None:
         df_init = self.dataset_unrolled_cold_start.copy()
@@ -944,14 +944,13 @@ class AmazonECommerceFeedbackLoop():
         while epoch < self.config.epochs+1:
             start_e = time.time()
 
-            epoch_interactions = []
             epochs_interactions_df = []
             print(f"\n --- Epoch n° {epoch} with model: {self.model_name_config} --- \n")
 
             # Get dates from the pre-computed distribution
             epoch_dates = [start_simulation_date + relativedelta(days=i) for i in range((end_date-start_simulation_date).days+1)]
 
-            print(f"\n Epoch {epoch} dates: {[d.strftime("%Y-%m-%d") for d in epoch_dates]} \n")
+            print(f"\n Epoch {epoch} dates: {[d.strftime('%Y-%m-%d') for d in epoch_dates]} \n")
             for date in epoch_dates:
                 date_str = date.strftime("%Y-%m-%d")
                 try:
@@ -1007,9 +1006,18 @@ class AmazonECommerceFeedbackLoop():
                         else:
                             recbole_item_id = next(choice_iter)
                         
+                        # single_interaction_df = {
+                        #     "user_id": user,
+                        #     "item_id": recbole_item_id,
+                        #     "date": date,
+                        #     "timestamp": recbole_timestamp,
+                        # }
+                        # epochs_interactions_df.append(single_interaction_df)
+
+                        our_item_id = self.recbole_dataset.id2token(self.recbole_dataset.iid_field, recbole_item_id)
                         single_interaction_df = {
                             "user_id": user,
-                            "item_id": recbole_item_id,
+                            "item_id": our_item_id,
                             "date": date,
                             "timestamp": recbole_timestamp,
                         }
@@ -1067,26 +1075,67 @@ class AmazonECommerceFeedbackLoop():
             
             if self.config.experiment_mode == "p-validation":
                 if (end_e - start_e) <= 60:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds with total new interactions: {len(epochs_interactions_df)} -- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- p = {p} --- K AV items = {k_horizon} \n"
+                    )
                 else:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes with total new interactions: {len(epochs_interactions_df)} -- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- p = {p} --- K AV items = {k_horizon} \n"
+                    )
+
             elif self.config.experiment_mode == "compare-models":
+                model_name = self.config.recommender_model['model_name']
                 if (end_e - start_e) <= 60:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds with total new interactions: {len(epochs_interactions_df)} -- recom model = {self.config.recommender_model["model_name"]} --- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- recom model = {model_name} --- p = {p} --- K AV items = {k_horizon} \n"
+                    )
                 else:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes with total new interactions: {len(epochs_interactions_df)} -- recom model = {self.config.recommender_model["model_name"]} --- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- recom model = {model_name} --- p = {p} --- K AV items = {k_horizon} \n"
+                    )
+
             elif self.config.experiment_mode == "recom_model_test":
                 if (end_e - start_e) <= 60:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds with total new interactions: {len(epochs_interactions_df)} -- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- p = {p} --- K AV items = {k_horizon} \n"
+                    )
                 else:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes with total new interactions: {len(epochs_interactions_df)} -- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- p = {p} --- K AV items = {k_horizon} \n"
+                    )
+
             elif self.config.experiment_mode == "k_items_evaluation":
+                model_name = self.config.recommender_model['model_name']
                 if (end_e - start_e) <= 60:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds with total new interactions: {len(epochs_interactions_df)} -- recom model = {self.config.recommender_model["model_name"]} --- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {end_e - start_e} seconds "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- recom model = {model_name} --- p = {p} --- K AV items = {k_horizon} \n"
+                    )
                 else:
-                    print(f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes with total new interactions: {len(epochs_interactions_df)} -- recom model = {self.config.recommender_model["model_name"]} --- p = {p} --- K AV items = {k_horizon} \n")
+                    print(
+                        f"\n --- Time elapsed in epoch n° {epoch}: {(end_e - start_e)/60} minutes "
+                        f"with total new interactions: {len(epochs_interactions_df)} "
+                        f"-- recom model = {model_name} --- p = {p} --- K AV items = {k_horizon} \n"
+                    )
             
-            print(f"\n The epoch worked from {start_simulation_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")} \n")
+            print(
+                f"\n The epoch worked from "
+                f"{start_simulation_date.strftime('%Y-%m-%d')} "
+                f"to {end_date.strftime('%Y-%m-%d')} \n"
+            )
 
             start_simulation_date = (start_simulation_date.replace(day=1) + relativedelta(months=1)).replace(year=start_simulation_date.year + (start_simulation_date.month // 12))
             end_date = start_simulation_date + relativedelta(months=1) - relativedelta(days=1)
@@ -1094,13 +1143,16 @@ class AmazonECommerceFeedbackLoop():
             epoch_interactions_df = pd.DataFrame(epochs_interactions_df)
             epoch_interactions_df.to_csv(os.path.join(results_path, f"epoch_{epoch}.csv"))
 
-            with open(os.path.join(results_scores_path, f"top_k_scores_epoch_{epoch}.pkl"), "wb") as f:
-                pickle.dump(self.top_k_users_scores, f, protocol=pickle.HIGHEST_PROTOCOL)
-            with open(os.path.join(results_scores_path, f"all_scores_epoch_{epoch}.pkl"), "wb") as f:
-                pickle.dump(self.all_users_scores, f, protocol=pickle.HIGHEST_PROTOCOL)
-            if p == 0:
-                with open(os.path.join(results_scores_path, f"user_strategy_scores_epoch_{epoch}.pkl"), "wb") as f:
-                    pickle.dump(self.usr_strategy_ranking, f, protocol=pickle.HIGHEST_PROTOCOL)   
+            # !!
+
+
+            # with open(os.path.join(results_scores_path, f"top_k_scores_epoch_{epoch}.pkl"), "wb") as f:
+            #     pickle.dump(self.top_k_users_scores, f, protocol=pickle.HIGHEST_PROTOCOL)
+            # with open(os.path.join(results_scores_path, f"all_scores_epoch_{epoch}.pkl"), "wb") as f:
+            #     pickle.dump(self.all_users_scores, f, protocol=pickle.HIGHEST_PROTOCOL)
+            # if p == 0:
+            #     with open(os.path.join(results_scores_path, f"user_strategy_scores_epoch_{epoch}.pkl"), "wb") as f:
+            #         pickle.dump(self.usr_strategy_ranking, f, protocol=pickle.HIGHEST_PROTOCOL)   
 
             self.top_k_users_scores = {}
             self.all_users_scores = {}

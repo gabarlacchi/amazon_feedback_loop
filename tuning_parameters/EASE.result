@@ -1,0 +1,36 @@
+reg_weight:250.0
+Valid result:
+ndcg@10 : 0.2293    recall@10 : 0.2101    precision@10 : 0.1262    hit@10 : 0.5905    itemcoverage@10 : 0.2264    mrr@10 : 0.3974    map@10 : 0.1484
+Test result:
+ndcg@10 : 0.2434    recall@10 : 0.2347    precision@10 : 0.1284    hit@10 : 0.623    itemcoverage@10 : 0.2236    mrr@10 : 0.4088    map@10 : 0.159
+
+reg_weight:10.0
+Valid result:
+ndcg@10 : 0.2293    recall@10 : 0.2101    precision@10 : 0.1262    hit@10 : 0.5905    itemcoverage@10 : 0.2264    mrr@10 : 0.3974    map@10 : 0.1484
+Test result:
+ndcg@10 : 0.2434    recall@10 : 0.2347    precision@10 : 0.1284    hit@10 : 0.623    itemcoverage@10 : 0.2236    mrr@10 : 0.4088    map@10 : 0.159
+
+reg_weight:1.0
+Valid result:
+ndcg@10 : 0.2293    recall@10 : 0.2101    precision@10 : 0.1262    hit@10 : 0.5905    itemcoverage@10 : 0.2264    mrr@10 : 0.3974    map@10 : 0.1484
+Test result:
+ndcg@10 : 0.2434    recall@10 : 0.2347    precision@10 : 0.1284    hit@10 : 0.623    itemcoverage@10 : 0.2236    mrr@10 : 0.4088    map@10 : 0.159
+
+reg_weight:1000.0
+Valid result:
+ndcg@10 : 0.2293    recall@10 : 0.2101    precision@10 : 0.1262    hit@10 : 0.5905    itemcoverage@10 : 0.2264    mrr@10 : 0.3974    map@10 : 0.1484
+Test result:
+ndcg@10 : 0.2434    recall@10 : 0.2347    precision@10 : 0.1284    hit@10 : 0.623    itemcoverage@10 : 0.2236    mrr@10 : 0.4088    map@10 : 0.159
+
+reg_weight:500.0
+Valid result:
+ndcg@10 : 0.2293    recall@10 : 0.2101    precision@10 : 0.1262    hit@10 : 0.5905    itemcoverage@10 : 0.2264    mrr@10 : 0.3974    map@10 : 0.1484
+Test result:
+ndcg@10 : 0.2434    recall@10 : 0.2347    precision@10 : 0.1284    hit@10 : 0.623    itemcoverage@10 : 0.2236    mrr@10 : 0.4088    map@10 : 0.159
+
+reg_weight:100.0
+Valid result:
+ndcg@10 : 0.2293    recall@10 : 0.2101    precision@10 : 0.1262    hit@10 : 0.5905    itemcoverage@10 : 0.2264    mrr@10 : 0.3974    map@10 : 0.1484
+Test result:
+ndcg@10 : 0.2434    recall@10 : 0.2347    precision@10 : 0.1284    hit@10 : 0.623    itemcoverage@10 : 0.2236    mrr@10 : 0.4088    map@10 : 0.159
+

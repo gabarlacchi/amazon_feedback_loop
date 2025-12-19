@@ -91,7 +91,7 @@ def main(args: argparse):
                 # NOTE that it does not set up the found parameters. They are to be defined in the json config
                 # A file will be output with the results
                 _ = feedback_loop_tool.tuning_hyperparameters()
-
+                exit()
                 if usrstrategy_model_name == "Custom choice model":
                     feedback_loop_tool.init_choice_model()
                     feedback_loop_tool.user_choice_model.results_path = choice_dir
