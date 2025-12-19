@@ -320,7 +320,6 @@ class AmazonECommerceFeedbackLoop():
             add_if("reg_weight")
             add_if("cin_layer_size")
             add_if("direct")
-
         elif self.model_name_recbole == "DCNV2":
             # Cross network v2 + deep MLP
             add_if("embedding_size")
@@ -332,9 +331,8 @@ class AmazonECommerceFeedbackLoop():
             add_if("mixed")
             add_if("expert_num")
             add_if("low_rank")
-
-            
-            
+        elif self.model_name_recbole == "FM":
+            add_if("embedding_size")
 
         # Remove None
         self.parameter_dict = {k: v for k, v in self.parameter_dict.items() if v is not None}
