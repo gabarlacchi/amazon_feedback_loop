@@ -216,7 +216,8 @@ class AmazonECommerceFeedbackLoop():
             "NeuMF": "NeuMF",
             "DeepFM": "DeepFM", 
             "xDeepFM": "xDeepFM",
-            "DCNV2": "DCNV2"
+            "DCNV2": "DCNV2",
+            "FM": "FM"
         }
         try:
             self.raw_model_name = self.config.recommender_model.model_name
