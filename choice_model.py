@@ -440,7 +440,7 @@ class ChoiceModel():
         logits = utilities / tau
         exp_util = np.exp(logits - np.max(logits))
         probs = exp_util / exp_util.sum()
-        
+
         # PLOT score ranking variation respect to tau
         # candidate_set_size = self.config.user_strategy["candidate_set"]["size"]
         # sorted_probs = probs.sort_values(ascending=True)

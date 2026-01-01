@@ -38,6 +38,8 @@ class AmazonBooksDataset:
 
         self.distribution_timeline_path = f"./cache/distribution_timeline_amazon_books.csv"
         self.unrolled_dataset_total_path = f"./cache/unrolled_total_{self.y1}-{self.y2}_amazon_books.csv"
+        self.users_rating_distribution_path = f"./cache/users_rating_distribution_{self.y1}-{self.y2}_amazon_books.csv"
+        self.global_fallback_rating_distribution_path = f"./cache/global_fallback_rating_distribution_{self.y1}-{self.y2}_amazon_books.csv"
         self.cache_mapping_strings_int_path_users = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_users_amazon_books.csv"
         self.cache_mapping_strings_int_path_items = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_items_amazon_books.csv"
         self.dump_dataset = f"./cache/real_dataset_sim_amazon_books"
@@ -170,8 +172,37 @@ class AmazonBooksDataset:
             self.unrolled_dataset_total.drop(columns=["parent_asin"])
 
             self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path)
+
+            self.user_rating_distribution()
+            self.user_rating_distributions.to_csv(self.users_rating_distribution_path)
+            self.global_rating_distribution.to_csv(self.global_fallback_rating_distribution_path)
         else:
             self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path, index_col=0)
+            # self.user_rating_distributions = pd.read_csv(self.users_rating_distribution_path, index_col=0)
+            # self.global_rating_distribution = pd.read_csv(self.global_fallback_rating_distribution_path, index_col=0)
+
+    def user_rating_distribution(self):
+        if "rating" in self.unrolled_dataset_total.columns:
+            user_rating_dist = (
+                self.unrolled_dataset_total
+                .groupby(['user_id', 'rating'])
+                .size()
+                .groupby(level=0)
+                .apply(lambda x: (x / x.sum()).to_dict())
+                .to_dict()
+            )
+            
+            self.user_rating_distributions = user_rating_dist
+            
+            # Fallback distribution in case of errors (just get the global distribution)
+            global_rating_dist = (
+                self.unrolled_dataset_total['rating']
+                .value_counts(normalize=True)
+                .to_dict()
+            )
+            self.global_rating_distribution = global_rating_dist
+        else:
+            raise f"\n Rating column not found in dataset \n"
 
     def real_dataset_save_cache(self, start_date: datetime, end_date: datetime, users: list, items: list):
         if not self.config.use_cache:

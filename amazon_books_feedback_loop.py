@@ -648,9 +648,9 @@ class AmazonBooksFeedbackLoop():
 
             user_feats.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), index=False, sep='\t') 
 
-            self._user_features_df = user_feats.copy()
-            self._item_features_df = item_feats.copy()
-        
+            self.user_cols_recbole = [c.split(":")[0] for c in user_feats.columns] 
+            self.item_cols_recbole = [c.split(":")[0] for c in item_feats.columns]
+
             working_df = self.dataset_unrolled_cold_start.copy()
 
             working_df["user_id"] = working_df["user_id"].astype('category')
@@ -665,11 +665,11 @@ class AmazonBooksFeedbackLoop():
             working_df["month"] = working_df["date"].dt.to_period("M")
 
             months = np.sort(working_df["month"].unique())
-
+            
             train_start_idx = 0
-            train_end_idx = 3  # Should be April (month index 3)
-            val_idx = 4        # Should be May (month index 4)
-            test_idx = 5       # Should be June (month index 5)
+            train_end_idx = train_len - 3
+            val_idx  = train_end_idx + 1
+            test_idx = train_end_idx + 2
 
             train_start = months[train_start_idx].to_timestamp(how="start").tz_localize("Europe/Rome")
             train_end = months[train_end_idx].to_timestamp(how="end").tz_localize("Europe/Rome")
@@ -696,7 +696,6 @@ class AmazonBooksFeedbackLoop():
                 how="inner",
             )
 
-            # Convert rating to binary label
             grouped["label"] = (grouped["rating"] >= 3.0).astype(float)
 
             cols = [
@@ -717,7 +716,6 @@ class AmazonBooksFeedbackLoop():
             val_mask = grouped["date"].between(val_start, val_end, inclusive="both")
             test_mask = grouped["date"].between(test_start, test_end, inclusive="both")
 
-            # Headers
             cols = [
                 "user_id:token", "item_id:token", "timestamp:float",
                 "label:float", "interaction_count:float", "date"
@@ -752,15 +750,10 @@ class AmazonBooksFeedbackLoop():
             self.working_test_df.drop(columns=["date"]).to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
                                 index=False, sep="\t")
             
-            # self._cached_historical_df = pd.concat([self.working_train_df, self.working_val_df, self.working_test_df], ignore_index=True)
-            self._cached_historical_df = pd.concat([
-                self.working_train_df.drop(columns=["date"]), 
-                self.working_val_df.drop(columns=["date"]), 
-                self.working_test_df.drop(columns=["date"])
-            ], ignore_index=True)
+            self._cached_historical_df = pd.concat([self.working_train_df, self.working_val_df, self.working_test_df], ignore_index=True)
         else:
 
-            # When tested, apply to the initialization block too
+            # # When tested, apply to the initialization block too
             DATASET_TYPE = "explicit"  # "implicit" or "explicit"
             EXPLICIT_THRESHOLD = 3.0
 
@@ -781,30 +774,22 @@ class AmazonBooksFeedbackLoop():
                 "timestamp": "timestamp:float"
             })
 
-            # Add rating column if explicit feedback
-            # if DATASET_TYPE == "explicit" and "rating" in filtered_interactions[0]:
-            #     df_new_inter["rating"] = [inter.get("rating", 0) for inter in filtered_interactions]
-
             if not hasattr(self, '_cached_historical_df'):
                 raise Exception("Historical data not initialized. Run with k=0 first.")
 
-            # Concatenate with historical data
+            # # Concatenate with historical data
             working_df = pd.concat([self._cached_historical_df, df_new_inter], ignore_index=True)
-            working_df = working_df.drop_duplicates(
-                subset=["user_id:token", "item_id:token", "rating:float", "timestamp:float"],
-                keep="last"
+
+            working_df["date"] = (
+                pd.to_datetime(working_df["timestamp:float"], unit="s", utc=True)
+                .dt.tz_convert("Europe/Rome")
+                .dt.normalize()
             )
-
-            # Create date and month columns
-            if "date" not in working_df.columns:
-                working_df["date"] = pd.to_datetime(working_df["timestamp:float"], unit="s", utc=True).dt.tz_convert("Europe/Rome").dt.normalize()
-
             working_df["month"] = working_df["date"].dt.to_period("M")
 
             # Get sorted unique months
             months = np.sort(working_df["month"].unique())
 
-            # Keep at most max_months_to_keep months plus initialization months
             max_months_to_keep = 12
             init_months = months[:self.config.cold_start_months]
 
@@ -815,21 +800,19 @@ class AmazonBooksFeedbackLoop():
                 months = np.sort(working_df["month"].unique())
 
             train_len = self.train_window_months
-            cold_start_len = self.config.cold_start_months  # e.g., 6
+            cold_start_len = self.config.cold_start_months
             n_months_total = len(months)
 
-            if cold_start_len < 3:
-                raise Exception("\nNeed at least 3 months of initialization (1 train, 1 val, 1 test).")
-
+            if cold_start_len < 4:
+                raise Exception("\nNeed at least 4 months of initialization (>=2 train, 1 val, 1 test).")
             months_available = min(cold_start_len + k, n_months_total)
 
-            if months_available < 3:
+            if months_available < 4:
                 raise Exception("Not enough months available to build train/val/test windows at this epoch.")
-
-            # Val is always 2nd to last month, test is always last month
-            val_idx = months_available - 2
-            test_idx = months_available - 1
+            
             train_end_idx = months_available - 3
+            val_idx = train_end_idx + 1
+            test_idx = train_end_idx + 2
 
             if self.use_all_data:
                 train_start_idx = 0
@@ -843,44 +826,16 @@ class AmazonBooksFeedbackLoop():
             val_month = months[val_idx]
             test_month = months[test_idx]
 
-            train_start = train_months[0].to_timestamp(how="start").tz_localize("Europe/Rome")
-            train_end = train_months[-1].to_timestamp(how="end").tz_localize("Europe/Rome")
-            val_start = val_month.to_timestamp(how="start").tz_localize("Europe/Rome")
-            val_end = val_month.to_timestamp(how="end").tz_localize("Europe/Rome")
-            test_start = test_month.to_timestamp(how="start").tz_localize("Europe/Rome")
-            test_end = test_month.to_timestamp(how="end").tz_localize("Europe/Rome")
+            working_df["interaction_count:float"] = working_df.groupby(
+                ["user_id:token", "item_id:token", "timestamp:float"]
+            )["month"].transform("count").astype(float)
 
-            # Group by user, item, timestamp - matching k=0 logic
-            grp = working_df.groupby(["user_id:token", "item_id:token", "timestamp:float"], as_index=False, observed=True)
-            grouped_counts = grp.size().rename(columns={"size": "interaction_count"})
-            grouped_dates = grp["date"].first().reset_index()
+            working_df = working_df.drop_duplicates(
+                subset=["user_id:token", "item_id:token", "timestamp:float"]
+            )
             
-            if DATASET_TYPE == "implicit":
-                working_df["interaction_count:float"] = working_df.groupby(
-                    ["user_id:token", "item_id:token", "timestamp:float"]
-                )["month"].transform("count").astype(float)
+            print(f"\n Epoch {k} - Train months: {train_months}, Val month: {val_month}, Test month: {test_month} \n")
 
-                working_df = working_df.drop_duplicates(
-                    subset=["user_id:token", "item_id:token", "timestamp:float"]
-                )
-
-                working_df["label:float"] = 1.0
-            
-            elif DATASET_TYPE == "explicit":
-                if "rating:float" not in working_df.columns:
-                    raise ValueError("Explicit feedback requires 'rating' column")
-
-                working_df["label:float"] = (working_df["rating:float"] >= EXPLICIT_THRESHOLD).astype(float)
-                working_df["interaction_count:float"] = working_df["rating:float"].astype(float)
-
-                working_df = working_df.sort_values("timestamp:float").drop_duplicates(
-                    subset=["user_id:token", "item_id:token"], 
-                    keep="last"
-                )
-            
-            else:
-                raise ValueError(f"Invalid DATASET_TYPE: {DATASET_TYPE}. Must be 'implicit' or 'explicit'")
-            
             train_mask = working_df["month"].isin(train_months)
             val_mask = working_df["month"] == val_month
             test_mask = working_df["month"] == test_month
@@ -935,25 +890,10 @@ class AmazonBooksFeedbackLoop():
                 sep="\t"
             )
 
-            # Update cached historical data with expanded versions
-            self._cached_historical_df = pd.concat([self.working_train_df, self.working_val_df, self.working_test_df], ignore_index=True)
+            all_expanded = pd.concat([self.working_train_df, self.working_val_df, self.working_test_df], ignore_index=True)
+            
+            self._cached_historical_df = all_expanded[cols].copy()
 
-            # Always write complete user/item files to maintain vocabulary
-            if hasattr(self, '_user_features_df') and hasattr(self, '_item_features_df'):
-                self._user_features_df.to_csv(
-                    os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.user"), 
-                    index=False, 
-                    sep='\t'
-                )
-                self._item_features_df.to_csv(
-                    os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.item"), 
-                    index=False, 
-                    sep='\t'
-                )
-                print(f"Epoch {k}: Wrote {len(self._user_features_df)} users and {len(self._item_features_df)} items")
-            else:
-                raise Exception("User and item feature dataframes not initialized!")
-    
     def recom_choice_model(self, curr_epoch: int, user_id_recbole: int) -> list:
         tau = self.config.user_strategy["tau"]
         recbole_dataset = self.recbole_dataset
@@ -1129,7 +1069,9 @@ class AmazonBooksFeedbackLoop():
                 our_user_id = self.recbole_dataset.id2token(self.recbole_dataset.uid_field, user_id_recbole)
                 print(f"\n User: {our_user_id} suggestions contain NaN: {arr}")
                 raise ValueError(f"\n Probabilities array given by recommender model contains Nan values")
-                
+            
+            # print(top_k_probs)
+            # exit()
             local_selected_index = int(self.rng.choice(len(top_k_probs), p=top_k_probs.cpu().numpy()))
             selected = int(top_k_indices[local_selected_index])
             while selected == 0:

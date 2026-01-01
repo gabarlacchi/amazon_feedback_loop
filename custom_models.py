@@ -481,69 +481,62 @@ class SpectralCF(GeneralRecommender):
     
 class ItemKNN(GeneralRecommender):
     """
-    ItemKNN is a basic model that computes item similarity with the interaction matrix.
-    Can also be configured for user-based collaborative filtering.
+    ItemKNN - Item-based collaborative filtering.
+    This is a convenience wrapper that sets knn_method='item'.
     """
-    
     input_type = InputType.POINTWISE
     type = ModelType.TRADITIONAL
     
     def __init__(self, config, dataset):
-        super(ItemKNN, self).__init__(config, dataset)
+        # Force item-based method
+        config["knn_method"] = "item"
         
         # Load parameters
         self.k = config["k"]
-        self.method = "item"  # 'item' or 'user'
+        self.method = "item"
         self.shrink = config["shrink"]
         
-        # Get interaction matrix
+        super(ItemKNN, self).__init__(config, dataset)
+        
+        # Get interaction matrix (users x items)
         self.interaction_matrix = dataset.inter_matrix(form="csr").astype(np.float32)
         shape = self.interaction_matrix.shape
         assert self.n_users == shape[0] and self.n_items == shape[1]
         
-        # Compute similarity matrix
+        # Compute item-item similarity matrix
+        # Transpose to get (items x users) for item-based similarity
         _, self.w = ComputeSimilarity(
-            self.interaction_matrix,
+            self.interaction_matrix.T,  # Transpose for item-based
             topk=self.k,
             shrink=self.shrink,
             method=self.method
         ).compute_similarity()
         
-        # Pre-compute prediction matrix
-        if self.method == "user":
-            # User-based: W is user-user similarity
-            self.pred_mat = self.w.dot(self.interaction_matrix).tolil()
-        else:
-            # Item-based: W is item-item similarity
-            self.pred_mat = self.interaction_matrix.dot(self.w).tolil()
+        # Pre-compute prediction matrix (item-based)
+        # Users x Items = (Users x Items) x (Items x Items)
+        self.pred_mat = self.interaction_matrix.dot(self.w).tolil()
         
-        # Fake loss for compatibility with RecBole trainer
+        # Fake loss for compatibility
         self.fake_loss = torch.nn.Parameter(torch.zeros(1))
         self.other_parameter_name = ["w", "pred_mat"]
     
     def forward(self, user, item):
-        """
-        Forward pass - not used in traditional models but required by interface.
-        """
+        """Forward pass."""
         user = user.cpu().numpy()
         item = item.cpu().numpy()
-        result = []
         
+        result = []
         for u, i in zip(user, item):
             result.append(self.pred_mat[u, i])
-            
+        
         return torch.FloatTensor(result).to(self.device)
     
     def calculate_loss(self, interaction):
-        """
-        Calculate loss - returns fake loss for traditional models.
-        """
+        """Returns fake loss."""
         return torch.nn.Parameter(torch.zeros(1)).to(self.device)
     
     def predict(self, interaction):
-        """
-        Predict scores for user-item pairs.
-        """
+        """Predict scores for user-item pairs."""
         user = interaction[self.USER_ID]
         item = interaction[self.ITEM_ID]
         
@@ -553,19 +546,16 @@ class ItemKNN(GeneralRecommender):
         result = []
         for u, i in zip(user, item):
             result.append(self.pred_mat[u, i])
-            
+        
         return torch.FloatTensor(result).to(self.device)
     
     def full_sort_predict(self, interaction):
-        """
-        Predict scores for all items for given users.
-        """
+        """Predict scores for all items for given users."""
         user = interaction[self.USER_ID]
         user = user.cpu().numpy().astype(int)
         
         score_list = []
         for u in user:
-            # Get all scores for this user
             scores = self.pred_mat[u, :].toarray().flatten()
             score_list.append(scores)
         

@@ -1753,11 +1753,11 @@ class AmazonECommerceFeedbackLoop():
         recbole_dataset = self.recbole_dataset
         user_id = recbole_dataset.id2token(recbole_dataset.uid_field, user_id_recbole)
         items, scores = self.user_choice_model.predict_for_a_user(user_id=user_id, tau=tau)
-       
         probs = np.array(scores, dtype=float)
         probs = probs / probs.sum()
         sampled_index = int(self.rng.choice(len(items), p=probs))
         selected_item_id = items[sampled_index]
+
         try:
             item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, str(selected_item_id))
         except ValueError:

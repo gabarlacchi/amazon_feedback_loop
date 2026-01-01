@@ -84,6 +84,9 @@ def main(args: argparse):
                     init_dataset = AmazonECommerceDataset(config=config_run)
                     init_dataset.setup()
 
+                    print(init_dataset.global_rating_distribution)
+                    exit()
+
                     feedback_loop_tool = AmazonECommerceFeedbackLoop(config=config_run, initialization_dataset=init_dataset)
 
                     # Set up the system, save usefull data and pre-compute  interactions distributions
@@ -120,7 +123,6 @@ def main(args: argparse):
         if not os.path.exists(RESULTS_PATH_AMAZON_BOOKS):
             os.makedirs(RESULTS_PATH_AMAZON_BOOKS)
         
-
         model_name = config.recommender_model.model_name
         usrstrategy_model_name = config.user_strategy.model_name
 
