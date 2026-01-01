@@ -1,0 +1,5 @@
+model: LightGCN
+
+learning_rate loguniform -8,-1
+n_layers uniform 0,10
+reg_weight loguniform -8,-1

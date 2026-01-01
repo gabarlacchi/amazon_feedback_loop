@@ -1,0 +1,24 @@
+embedding_size:8
+Valid result:
+ndcg@10 : 0.1761    recall@10 : 0.1706    precision@10 : 0.0872    hit@10 : 0.5509    itemcoverage@10 : 0.0193    mrr@10 : 0.3428    map@10 : 0.104
+Test result:
+ndcg@10 : 0.1868    recall@10 : 0.1901    precision@10 : 0.0885    hit@10 : 0.5874    itemcoverage@10 : 0.0207    mrr@10 : 0.3476    map@10 : 0.1118
+
+embedding_size:16
+Valid result:
+ndcg@10 : 0.1585    recall@10 : 0.176    precision@10 : 0.0865    hit@10 : 0.5554    itemcoverage@10 : 0.0193    mrr@10 : 0.2783    map@10 : 0.0867
+Test result:
+ndcg@10 : 0.1641    recall@10 : 0.1906    precision@10 : 0.0877    hit@10 : 0.577    itemcoverage@10 : 0.0193    mrr@10 : 0.278    map@10 : 0.0902
+
+embedding_size:64
+Valid result:
+ndcg@10 : 0.1555    recall@10 : 0.1692    precision@10 : 0.0868    hit@10 : 0.5486    itemcoverage@10 : 0.0186    mrr@10 : 0.2761    map@10 : 0.0858
+Test result:
+ndcg@10 : 0.159    recall@10 : 0.1866    precision@10 : 0.087    hit@10 : 0.5667    itemcoverage@10 : 0.0193    mrr@10 : 0.2757    map@10 : 0.0862
+
+embedding_size:32
+Valid result:
+ndcg@10 : 0.1692    recall@10 : 0.1691    precision@10 : 0.0835    hit@10 : 0.5532    itemcoverage@10 : 0.0179    mrr@10 : 0.3234    map@10 : 0.0986
+Test result:
+ndcg@10 : 0.1715    recall@10 : 0.1818    precision@10 : 0.084    hit@10 : 0.5621    itemcoverage@10 : 0.0193    mrr@10 : 0.3097    map@10 : 0.0999
+

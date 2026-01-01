@@ -15,16 +15,27 @@ from utils import DotDict
 
 
 class ChoiceModel():
-    def __init__(self, interaction_df: pd.DataFrame, config: DotDict,  user_col: str = "user_id", item_col: str = "item_id", timestamp_col: str = "date", **kwargs):
+    def __init__(self, interaction_df: pd.DataFrame, config: DotDict,  user_col: str = "user_id", item_col: str = "item_id", timestamp_col: str = "date", rating_col: str = None, **kwargs):
         self.config = config
         
         self.df = interaction_df
 
-        self.df = self.df[["user_id", "item_id", "date", "timestamp"]]
+        if rating_col is None:
+            self.df = self.df[[user_col, item_col, timestamp_col, "timestamp"]]
+        else:
+            self.df = self.df[[user_col, item_col, timestamp_col, "timestamp", rating_col]]
+
+        # Amazon books: 0.69% of users have multiple ratings for the same item
 
         self.user_col = user_col
         self.item_col = item_col
         self.time_col = timestamp_col
+        self.rating_col = rating_col if rating_col is not None else None
+
+        if self.config.dataset == "amazon_e_commerce":
+            self.feedback_type = "implicit"
+        elif self.config.dataset == "amazon_books":
+            self.feedback_type = "explicit"
 
         self.tau = config.user_strategy.tau
 
@@ -140,43 +151,91 @@ class ChoiceModel():
             
         return pd.DataFrame(user_scores)
 
-    def compute_utilities(self, df, candidate_sets=None):
+    def compute_utilities(self, df, candidate_sets=None, rating_col=None):
         all_items = df["item_id"].unique()
-        n_users = df['user_id'].nunique()
+        lambda_rare_items = 0.1
 
-        # Precompute item interaction counts across all users
-        global_item_counts = df.groupby("item_id").size()
-        c_i_dict = (global_item_counts / n_users).to_dict()  # average interactions per user
+        if self.feedback_type == 'explicit':
+            if rating_col is None:
+                raise ValueError("rating_col must be specified for explicit feedback")
+            if rating_col not in df.columns:
+                raise ValueError(f"Column {rating_col} not found in dataframe")
 
-        # Group once by user_id to avoid filtering each time
+            return self._compute_utilities_explicit(df=df, candidate_sets=candidate_sets, all_items=all_items, rating_col=rating_col)
+        
+        else:
+            return self._compute_utilities_implicit(df=df, lambda_rare_items=lambda_rare_items, candidate_sets=candidate_sets)
+
+    def _compute_utilities_explicit(self, df, candidate_sets, all_items, rating_col):
+        alpha = 0.5    # Weight for user's rating
+        beta = 0.2     # Weight for rating consistency
+        gamma = 0.15   # Weight for rating frequency (confidence)
+        delta = 0.15   # Weight for global popularity
+
+        global_item_stats = df.groupby("item_id")[rating_col].agg(['mean', 'count'])
+        global_mean_rating = global_item_stats['mean'].to_dict()
+        global_rating_counts = global_item_stats['count'].to_dict()
+
+        max_global_count = global_item_stats['count'].max()
+        global_count_norm = {item: count / max_global_count for item, count in global_rating_counts.items()}
+
+        rating_min = df[rating_col].min()
+        rating_max = df[rating_col].max()
+        rating_range = rating_max - rating_min
+
         grouped = df.groupby('user_id')
-
         results = {}
 
         for user_id, user_df in grouped:
             candidate_set = candidate_sets[user_id]
             user_df = user_df[user_df[self.item_col].isin(candidate_set)]
-            user_item_counts = user_df.groupby(self.item_col).size()
-            c_u = user_item_counts.mean()
-            sigma_u = user_item_counts.std(ddof=0)
 
-            # Compute utility for all items
+            user_item_stats = user_df.groupby(self.item_col)[rating_col].agg(['mean', 'std', 'count'])
+
+            utilities = []
+
+            for item in all_items:
+                if item in user_item_stats.index:
+                    mean_rating = user_item_stats.loc[item, 'mean']
+                    std_rating = user_item_stats.loc[item, 'std'] if not pd.isna(user_item_stats.loc[item, 'std']) else 0
+                    count_rating = user_item_stats.loc[item, 'count']
+
+                    norm_rating = (mean_rating - rating_min) / rating_range
+
+                    max_std = rating_range / 2 
+                    consistency = 1 - (std_rating / (max_std + 1e-8))
+
+                    confidence = np.log1p(count_rating) / np.log1p(user_item_stats['count'].max())
+                else:
+                    global_rating = global_mean_rating.get(item, (rating_min + rating_max) / 2)
+                    norm_rating = (global_rating - rating_min) / rating_range
+                    norm_rating *= 0.5
+
+                    consistency = 0.5 # Neutral consistency
+                    confidence = 0.1  # Low confidence for unrated items
+
+                global_pop = global_count_norm.get(item, 0)
+
+                utility = (
+                    alpha * norm_rating +
+                    beta * consistency +
+                    gamma * confidence +
+                    delta * global_pop
+                )
+
+                utilities.append(utility)
+
             eta = np.random.normal(0, 0.01, size=len(all_items))
-            c_i_values = np.array([c_i_dict.get(item, 0) for item in all_items])
-            omega_ui = c_u + (sigma_u * c_i_values) + eta
+            utilities = np.array(utilities) + eta
 
-            # Normalize utilities to [0, 1]
-            min_u, max_u = omega_ui.min(), omega_ui.max()
-            norm_utils = (omega_ui - min_u) / (max_u - min_u + 1e-8)
+            exp_utilities = np.exp(utilities - utilities.max())
+            norm_utilities = exp_utilities / (exp_utilities.sum() + 1e-8)
 
-            results[user_id] = pd.Series(norm_utils, index=all_items)
+            results[user_id] = pd.Series(norm_utilities, index=all_items)
 
-        results = pd.DataFrame(results)
+        return pd.DataFrame(results)
 
-        return results
-
-    def compute_utilities_v2(self, df, candidate_sets=None):
-        lambda_rare_items = 0.1
+    def _compute_utilities_implicit(self, df, lambda_rare_items, candidate_sets):
         all_items = df["item_id"].unique()
         n_users = df['user_id'].nunique()
 
@@ -221,10 +280,10 @@ class ChoiceModel():
         """
         candidate_set_settings = self.config.user_strategy.candidate_set
         results = {}
+        
         try:
             all_items = df['item_id'].unique().tolist()
         except Exception as e:
-            print("PORCODDIO")
             print(traceback.format_exc())
             raise Exception(f"{e}")
 
@@ -314,7 +373,7 @@ class ChoiceModel():
         if os.path.exists(os.path.join(self.cache_root, self.utilities_users_path)):
             utilities_users = pd.read_csv(os.path.join(self.cache_root, self.utilities_users_path), index_col=0)
         else:
-            utilities_users = self.compute_utilities_v2(df=df, candidate_sets=candidate_sets)
+            utilities_users = self.compute_utilities(df=df, candidate_sets=candidate_sets, rating_col="rating" if self.feedback_type=="explicit" else None)
             utilities_users.to_csv(os.path.join(self.cache_root, self.utilities_users_path))
         
         self.exploration_rate_users = results
@@ -323,7 +382,7 @@ class ChoiceModel():
 
         # PLOTS
         # Utilities over population
-        # utilities_users = self.compute_utilities_v2(df=df, candidate_sets=candidate_sets)
+        # utilities_users = self._compute_utilities_implicit(df=df, candidate_sets=candidate_sets)
         # df = self.utilities_users
 
         # figsize = (20, 15)
@@ -413,19 +472,29 @@ class ChoiceModel():
     
     def update(self, new_interactions, epoch):
         new_df = pd.DataFrame(new_interactions)
+    
+        # Ensure date column is datetime BEFORE selecting columns
         new_df[self.time_col] = pd.to_datetime(new_df[self.time_col])
-
-        new_df = new_df[["user_id", "item_id", "date", "timestamp"]]
-
+        
+        # Select only needed columns
+        if self.feedback_type == "explicit":
+            new_df = new_df[["user_id", "item_id", "rating", "date", "timestamp"]]
+        else:
+            new_df = new_df[["user_id", "item_id", "date", "timestamp"]]
+        
+        # ALSO ensure self.df has the right type (defensive coding)
+        self.df[self.time_col] = pd.to_datetime(self.df[self.time_col])
+        
+        # Now concat and sort
         self.df = pd.concat([self.df, new_df], ignore_index=True).sort_values(
             self.time_col
         ).reset_index(drop=True)
 
         if self.results_path is None:
             raise Exception("The choice model has no access to results folder")
-        
+        # print(self.df.item_id.unique())
         candidate_sets = self.candidate_set_items(df=self.df)
-        # UNCOMMENT IF YOU WANT TOSAVE UTILITIES AND CANDIDATE SETS OVER TIME
+        # UNCOMMENT IF YOU WANT TO SAVE UTILITIES AND CANDIDATE SETS OVER TIME
 
         # target_folder = os.path.join(self.results_path, "candidate_set_items")
         # os.makedirs(target_folder, exist_ok=True)
@@ -435,7 +504,7 @@ class ChoiceModel():
         #     index=False
         # )
 
-        utilities_users = self.compute_utilities_v2(df=self.df, candidate_sets=candidate_sets)
+        utilities_users = self.compute_utilities(df=self.df, candidate_sets=candidate_sets, rating_col="rating" if self.feedback_type=="explicit" else None)
         # target_folder = os.path.join(self.results_path, "utilities_users")
         # os.makedirs(target_folder, exist_ok=True)
         # utilities_users.to_csv(
@@ -445,10 +514,6 @@ class ChoiceModel():
 
         self.candidate_sets = candidate_sets
         self.utilities_users = utilities_users
-
-
-
-
 
         # new_df = pd.DataFrame(new_interactions)
         # new_df[self.time_col] = pd.to_datetime(new_df[self.time_col])
@@ -471,7 +536,7 @@ class ChoiceModel():
         # candidate_sets.to_csv(os.path.join(target_folder, f"epoch_{epoch}.csv"), index=False)
 
         # # Utilities
-        # utilities_users = self.compute_utilities_v2(df=self.df, candidate_sets=candidate_sets)
+        # utilities_users = self._compute_utilities_implicit(df=self.df, candidate_sets=candidate_sets)
         # target_folder = os.path.join(self.results_path, "utilities_users")
         # if not os.path.exists(target_folder):
         #     os.makedirs(target_folder)

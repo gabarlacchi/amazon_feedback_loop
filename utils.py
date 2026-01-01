@@ -96,3 +96,34 @@ def get_consistent_users(df, date_col="date", user_col="user_id", min_months_per
                     active_users.append(user)
         
         return active_users
+
+def get_consistent_users_optimized(df, date_col="date", user_col="user_id", min_months_per_year=12):
+
+    # Convert date to datetime if it's not already
+    if not pd.api.types.is_datetime64_any_dtype(df[date_col]):
+        df = df.copy()
+        df[date_col] = pd.to_datetime(df[date_col])
+    
+    df_temp = df[[user_col, date_col]].copy()
+    df_temp['year'] = df_temp[date_col].dt.year
+    df_temp['month'] = df_temp[date_col].dt.month
+    
+    # Get the range of years in the dataset
+    min_year = df_temp['year'].min()
+    max_year = df_temp['year'].max()
+    total_years = max_year - min_year + 1
+    
+    # For each user-year, count distinct months
+    user_activity = df_temp.groupby([user_col, 'year'])['month'].nunique().reset_index()
+    user_activity.columns = [user_col, 'year', 'month_count']
+    
+    # Filter to keep only user-years with sufficient months
+    user_activity = user_activity[user_activity['month_count'] >= min_months_per_year]
+    
+    # Count how many years each user has (with sufficient months)
+    user_year_counts = user_activity.groupby(user_col)['year'].count()
+    
+    # Keep only users who have all years
+    active_users = user_year_counts[user_year_counts == total_years].index.tolist()
+    
+    return active_users
