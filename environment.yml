@@ -1,28 +1,58 @@
-name: coop_2
+name: coop_recbole
 channels:
+  - conda-forge
   - defaults
 dependencies:
-  - libgcc-ng==11.2.0=h1234567_1
-  - readline==8.2=h5eee18b_0
-  - ca-certificates
-  - python==3.12.2=h996f2a0_0
-  - ncurses==6.4=h6a678d5_0
-  - _openmp_mutex==5.1=1_gnu
-  - sqlite==3.41.2=h5eee18b_0
-  - wheel==0.41.2=py312h06a4308_0
-  - libuuid==1.41.5=h5eee18b_0
-  - libstdcxx-ng==11.2.0=h1234567_1
-  - openssl
-  - xz==5.4.6=h5eee18b_0
-  - libffi==3.4.4=h6a678d5_0
-  - libgomp==11.2.0=h1234567_1
-  - tk==8.6.12=h1ccaba5_0
-  - _libgcc_mutex==0.1=main
-  - expat==2.5.0=h6a678d5_0
-  - zlib==1.2.13=h5eee18b_0
-  - setuptools==68.2.2=py312h06a4308_0
-  - bzip2==1.0.8=h5eee18b_5
-  - pip==23.3.1=py312h06a4308_0
-  - ld_impl_linux-64==2.38=h1181459_1
-  - ipykernel
-prefix: /home/gbarlacchi/anaconda3/envs/coop_2
+  - tk=8.6.12
+  - nest-asyncio=1.6.0
+  - ld_impl_linux-64=2.38
+  - ptyprocess=0.7.0
+  - libffi=3.4.4
+  - libgcc-ng=11.2.0
+  - importlib-metadata=8.6.1
+  - libgomp=11.2.0
+  - ipykernel=6.29.5
+  - jedi=0.19.2
+  - comm=0.2.2
+  - pexpect=4.9.0
+  - asttokens=3.0.0
+  - exceptiongroup=1.2.2
+  - pip=23.3.1
+  - wheel=0.41.2
+  - pickleshare=0.7.5
+  - zlib=1.2.13
+  - stack_data=0.6.3
+  - expat=2.5.0
+  - python-dateutil=2.9.0.post0
+  - zeromq=4.3.5
+  - jupyter_client=8.6.3
+  - ipython=8.32.0
+  - parso=0.8.4
+  - platformdirs=4.3.6
+  - xz=5.4.6
+  - libstdcxx-ng=11.2.0
+  - _libgcc_mutex=0.1
+  - ncurses=6.4
+  - readline=8.2
+  - python=3.11
+  - bzip2=1.0.8
+  - _openmp_mutex=5.1
+  - pyzmq=26.2.0
+  - debugpy=1.8.11
+  - zipp=3.21.0
+  - decorator=5.1.1
+  - pure_eval=0.2.3
+  - jupyter_core=5.7.2
+  - matplotlib-inline=0.1.7
+  - sqlite=3.41.2
+  - executing=2.1.0
+  - libuuid=1.41.5
+  - prompt-toolkit=3.0.50
+  - traitlets=5.14.3
+  - libsodium=1.0.18
+  - pygments=2.19.1
+  - wcwidth=0.2.13
+  - openssl=3.0.15
+  - setuptools=68.2.2
+  - ca-certificates=2025.1.31
+prefix: /home/gbarlacchi/anaconda3/envs/coop_recbole
