@@ -34,7 +34,7 @@ from recbole.utils import get_model, get_trainer
 
 from utils import DotDict, get_consistent_users, _setup_repro
 # from custom_models import UserKNN, IndividualRandom, IndividualPopularity, LightGCN, BPR, SpectralCF, NeuMF, NNCF
-from custom_models import NeuMF, BPR, ItemKNN, UserKNN, SpectralCF
+from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, EASE
 from amazonecommerce_dataset import AmazonECommerceDataset
 from choice_model import ChoiceModel
 
@@ -317,16 +317,22 @@ class AmazonECommerceFeedbackLoop():
         CUSTOM_MODELS = {
             "NeuMF",
             "BPR",
-            "ItemKNN",
             "UserKNN",
-            "SpectralCF"
+            "ItemKNN",
+            "SpectralCF",
+            "FM",
+            "DeepFM",
+            "EASE"
         }
         custom_model_map = {
             "NeuMF": NeuMF,
             "BPR": BPR,
-            "ItemKNN": ItemKNN,
             "UserKNN": UserKNN,
-            "SpectralCF": SpectralCF
+            "ItemKNN": ItemKNN,
+            "SpectralCF": SpectralCF,
+            "FM": FM,
+            "DeepFM": DeepFM,
+            "EASE": EASE
         }
 
         if is_first_init or not hasattr(self, 'model_config'):
@@ -1881,6 +1887,7 @@ class AmazonECommerceFeedbackLoop():
             try:
                 SCORES_PATH = "./"
                 item_scores = self.recbole_model.full_sort_predict(interaction_batch).cpu()
+
             except Exception as e:
                 traceback.print_exc()
                 raise Exception(f"{e}")
@@ -1898,8 +1905,9 @@ class AmazonECommerceFeedbackLoop():
                 top_k_indices = torch.topk(probabilities, K_horizon, dim=0)[1]
                 
                 top_k_probs = probabilities[top_k_indices]
+                # print({top_k_probs.min(), top_k_probs.max()})
                 top_k_probs = top_k_probs / torch.sum(top_k_probs)
-
+                
                 has_nan = np.isnan(top_k_probs).any()
                 if has_nan:
                     our_user_id = self.recbole_dataset.id2token(self.recbole_dataset.uid_field, user_id_recbole)

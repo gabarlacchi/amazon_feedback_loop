@@ -34,9 +34,17 @@ from recbole.utils import get_model, get_trainer
 
 from utils import DotDict, get_consistent_users, _setup_repro, get_consistent_users_optimized
 # from custom_models import UserKNN, IndividualRandom, IndividualPopularity, LightGCN, BPR, SpectralCF, NeuMF, NNCF
-from custom_models import NeuMF, BPR, ItemKNN, UserKNN
+from custom_models import NeuMF, BPR, UserKNN, ItemKNN, FM
 from amazon_books_dataset import AmazonBooksDataset
 from choice_model import ChoiceModel
+
+# Helpers to clean up tokens
+_PUNCT_RE = re.compile(r"[^a-z0-9\s]+")  # keep letters/digits/space
+_WS_RE = re.compile(r"\s+")
+_CORP_SUFFIX_RE = re.compile(
+    r"\b(inc|inc\.|ltd|ltd\.|llc|llc\.|gmbh|s\.?a\.?|s\.?r\.?l\.?|spa|s\.p\.a\.|bv|ag|kg|oy|ab|plc|co|co\.|company|limited|press|publishing)\b",
+    flags=re.IGNORECASE
+)
 
 class AmazonBooksFeedbackLoop():
     def __init__(self, config: DotDict, initialization_dataset: AmazonBooksDataset, **kwargs):
@@ -138,6 +146,95 @@ class AmazonBooksFeedbackLoop():
             train_df = train_df.sort_values(["user_id:token", "timestamp:float"], ignore_index=True)
         
         return train_df, val_df, test_df
+    
+    @staticmethod
+    def _normalize_publisher(s: str) -> str:
+        def normalize_token(s: str) -> str:
+            if not s:
+                return "unknown"
+            s = str(s).strip().lower()
+            s = s.replace("&", " and ")
+            s = _PUNCT_RE.sub(" ", s)
+            s = _WS_RE.sub(" ", s).strip()
+            return s if s else "unknown"
+    
+        s = normalize_token(s)
+        if s == "unknown":
+            return s
+        # remove corp suffixes, then clean again
+        s = _CORP_SUFFIX_RE.sub(" ", s)
+        s = _WS_RE.sub(" ", s).strip()
+        return s if s else "unknown"
+    
+    @staticmethod
+    def _normalize_language_token(raw: str) -> str:
+        if raw is None:
+            return "unknown"
+        s = str(raw).strip().lower()
+        if not s or s == "unknown":
+            return "unknown"
+
+        # Special case
+        if "multilingual" in s:
+            return "multi"
+
+        # Split multi-valued like "English, Swedish"
+        parts = [p.strip() for p in s.split(",") if p.strip()]
+        if not parts:
+            return "unknown"
+
+        primary = parts[0]  # choose first as primary language
+
+        # Map to canonical codes (extend as needed)
+        mapping = {
+            "english": "en",
+            "french": "fr",
+            "spanish": "es",
+            "german": "de",
+            "swedish": "sv",
+            "russian": "ru",
+            "polish": "pl",
+            "hebrew": "he",
+            "serbian": "sr",
+            "chinese": "zh",
+            "japanese": "ja",
+            "romanian": "ro",
+        }
+
+        return mapping.get(primary, primary)
+    
+    @staticmethod
+    def _normalize_token_seq(s: str, max_len: int = 8) -> str:
+        """
+        For token_seq fields in RecBole: return a space-separated token sequence.
+        RecBole commonly treats whitespace-separated tokens as token_seq.
+        """
+        if not s:
+            return ""
+        s = str(s).strip().lower()
+
+        # unify separators to spaces
+        s = s.replace("|", " ")
+        s = s.replace(",", " ")
+        s = s.replace("/", " ")
+        s = s.replace(";", " ")
+        s = s.replace("&", " and ")
+
+        # remove punctuation-ish noise but keep spaces
+        s = _PUNCT_RE.sub(" ", s)
+        s = _WS_RE.sub(" ", s).strip()
+
+        if not s:
+            return ""
+
+        toks = s.split(" ")
+        # optional: drop very short tokens
+        # toks = [t for t in toks if len(t) >= 2]
+
+        if max_len is not None:
+            toks = toks[:max_len]
+
+        return " ".join(toks)
     
     def set_repetition_seed(self, p: float, rep_idx: int):
         """
@@ -293,20 +390,54 @@ class AmazonBooksFeedbackLoop():
         self.parameter_dict.update(hp.best_params)
         return None
     
+    def evaluate_initial_model(self, save_dir: str = None, show_progress: bool = False):
+
+        if not hasattr(self, 'recbole_model') or not hasattr(self, 'train_data'):
+            raise RuntimeError("Model must be initialized first. Call init_recbole_model(is_first_init=True)")
+        
+        # Set up save directory
+        if save_dir is None:
+            save_dir = os.path.join(self.tmp_folder, "train_logs")
+        os.makedirs(save_dir, exist_ok=True)
+        
+        save_stem = os.path.join(save_dir, "epoch_0")
+        
+        # Create trainer
+        trainer = Trainer(self.model_config, self.recbole_model)
+        
+        self.logger.info("[Epoch 0] Starting initial model training and evaluation")
+        self._fit_with_tracking(
+            trainer=trainer,
+            save_stem=save_stem,
+            show_progress=show_progress,
+            save_plots=False
+        )
+        
+        # Load the final test metrics that were saved
+        metrics_file = f"{save_stem}_final_test_metrics.json"
+        if os.path.exists(metrics_file):
+            with open(metrics_file, 'r') as f:
+                final_metrics = json.load(f)
+            self.logger.info(f"[Epoch 0] Initial evaluation complete. Metrics saved to {metrics_file}")
+            return final_metrics
+        else:
+            self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
+            return None
+    
     def init_recbole_model(self, is_first_init=False, warm_start=True):
 
         # Some models need custom implemention, add here
         CUSTOM_MODELS = {
             "NeuMF",
             "BPR",
+            "UserKNN",
             "ItemKNN",
-            "UserKNN"
         }
         custom_model_map = {
             "NeuMF": NeuMF,
             "BPR": BPR,
+            "UserKNN": UserKNN,
             "ItemKNN": ItemKNN,
-            "UserKNN": UserKNN
         }
 
         if is_first_init or not hasattr(self, 'model_config'):
@@ -481,42 +612,42 @@ class AmazonBooksFeedbackLoop():
             # FOR USER KNN THE LIBRARY DOES NOT RECOGNIZE THE MODEL
             # SO FAR, I DID NOT UNDERSTAND HOW TO HANDLE IT 
             # IF I UNCOMMENT THE FOLLOWING, THE OTHER CUSTOM MODELS WORKS DIFFERENTLY BECAUSE THE DEFAULT PARAMETERS ARE DIFFERENT
-            try:
-                # For custom models, use a dummy valid model name for Config validation
-                config_model_name = "BPR" if self.use_custom_model else self.model_name_recbole
-                
-                self.model_config = Config(
-                    model=config_model_name,  # Use dummy name for custom models
-                    dataset="experiment_dataset",
-                    config_dict=self.parameter_dict
-                )
-                
-                # Override with actual model name after Config is created
-                if self.use_custom_model:
-                    self.model_config["model"] = self.model_name_recbole
-                
-                init_seed(self.model_config["seed"], self.model_config["reproducibility"])
-                init_logger(self.model_config)
-                self.logger = getLogger()
-                self.logger.info(f"[Epoch 0] Full initialization complete")
-            except Exception as e:
-                raise Exception(f"Error during the configuration of the model -> {e}")
-
-            # print(self.parameter_dict)
-            # exit()
-
             # try:
+            #     # For custom models, use a dummy valid model name for Config validation
+            #     config_model_name = "BPR" if self.use_custom_model else self.model_name_recbole
+                
             #     self.model_config = Config(
-            #         model=self.model_name_recbole,
+            #         model=config_model_name,  # Use dummy name for custom models
             #         dataset="experiment_dataset",
             #         config_dict=self.parameter_dict
             #     )
+                
+            #     # Override with actual model name after Config is created
+            #     if self.use_custom_model:
+            #         self.model_config["model"] = self.model_name_recbole
+                
             #     init_seed(self.model_config["seed"], self.model_config["reproducibility"])
             #     init_logger(self.model_config)
             #     self.logger = getLogger()
             #     self.logger.info(f"[Epoch 0] Full initialization complete")
             # except Exception as e:
             #     raise Exception(f"Error during the configuration of the model -> {e}")
+
+            # print(self.parameter_dict)
+            # exit()
+
+            try:
+                self.model_config = Config(
+                    model=self.model_name_recbole,
+                    dataset="experiment_dataset",
+                    config_dict=self.parameter_dict
+                )
+                init_seed(self.model_config["seed"], self.model_config["reproducibility"])
+                init_logger(self.model_config)
+                self.logger = getLogger()
+                self.logger.info(f"[Epoch 0] Full initialization complete")
+            except Exception as e:
+                raise Exception(f"Error during the configuration of the model -> {e}")
 
             try:
                 self.recbole_dataset = create_dataset(self.model_config)
@@ -540,6 +671,15 @@ class AmazonBooksFeedbackLoop():
             ).to(self.model_config["device"])
             
             self._first_init_complete = True
+
+            # !! Roughly initiated
+            evaluate_initial = True
+
+            if evaluate_initial:
+                self.logger.info("[Epoch 0] Evaluating initial model before simulation")
+                initial_metrics = self.evaluate_initial_model(show_progress=False)
+                self.logger.info(f"[Epoch 0] Initial metrics: {initial_metrics}")
+
         else:
             try:
                 self.recbole_dataset = create_dataset(self.model_config)
@@ -612,23 +752,50 @@ class AmazonBooksFeedbackLoop():
 
             # Item features
             # Remove desc_text
+            # item_feats = (
+            #     df.sort_values("date")
+            #     .drop_duplicates("item_id", keep="last")
+            #     .loc[:, ["item_id", "price", "category_seq", "desc_text", "publisher", "language"]]
+            # )
+            # item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
+
+            # item_feats['category_seq'] = item_feats['category_seq'].fillna('').str.replace('|', ' ')
+            # item_feats['price'] = item_feats['price'].fillna(0.0)
+            # item_feats['publisher'] = item_feats['publisher'].fillna('unknown')
+            # item_feats['language'] = item_feats['language'].fillna('unknown')
+
             item_feats = (
                 df.sort_values("date")
                 .drop_duplicates("item_id", keep="last")
-                .loc[:, ["item_id", "price", "category_seq", "desc_text", "publisher", "language"]]
+                .loc[:, ["item_id", "price", "category_seq", "publisher", "language"]]
             )
             item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
 
-            item_feats['category_seq'] = item_feats['category_seq'].fillna('').str.replace('|', ' ')
-            item_feats['price'] = item_feats['price'].fillna(0.0)
-            item_feats['publisher'] = item_feats['publisher'].fillna('unknown')
-            item_feats['language'] = item_feats['language'].fillna('unknown')
+            item_feats["price"] = item_feats["price"].fillna(0.0)
 
+            item_feats["category_seq"] = (
+                item_feats["category_seq"]
+                .fillna("")
+                .map(lambda x: self._normalize_token_seq(x, max_len=8))
+            )
+
+            item_feats["publisher"] = (
+                item_feats["publisher"]
+                .fillna("unknown")
+                .map(self._normalize_publisher)
+            )
+
+            item_feats["language"] = (
+                item_feats["language"]
+                .fillna("unknown")
+                .map(self._normalize_language_token)
+            )
+
+            # Remove desc_text
             item_feats = item_feats.rename(columns={
                 "item_id": "item_id:token",
                 "price": "price:float",
                 "category_seq": "category_seq:token_seq",
-                "desc_text": "desc_text:token",
                 "publisher": "publisher:token",
                 "language": "language:token",
             })
@@ -1036,7 +1203,13 @@ class AmazonBooksFeedbackLoop():
                     item_scores = item_scores.squeeze(0)
 
                 shifted_scores = item_scores - torch.min(item_scores) 
-                probabilities = shifted_scores / torch.sum(shifted_scores)
+                sum_shifted = torch.sum(shifted_scores)
+                if sum_shifted == 0 or torch.isnan(sum_shifted) or torch.isinf(sum_shifted):
+                    probabilities = torch.ones_like(shifted_scores) / len(shifted_scores)
+                    print(f"Warning: User {user_id_recbole} has all equal scores. Using uniform distribution.")
+                else:
+                    probabilities = shifted_scores / sum_shifted
+
                 top_k_indices = torch.topk(probabilities, K_horizon, dim=0)[1]
                 
                 top_k_probs = probabilities[top_k_indices]
@@ -1045,8 +1218,12 @@ class AmazonBooksFeedbackLoop():
                 has_nan = np.isnan(top_k_probs).any()
                 if has_nan:
                     our_user_id = self.recbole_dataset.id2token(self.recbole_dataset.uid_field, user_id_recbole)
-                    raise ValueError(f"\n NaN values got from recom model computation - cached: {top_k_probs}  for uer: {our_user_id}\n")
-                    
+                    print(f"\n Item score \n")
+                    print(item_scores.min(), item_scores.max(), item_scores)
+                    print(f"\n Probabilities \n")
+                    print(probabilities.min(), probabilities.max(), probabilities)
+                    raise ValueError(f"\n NaN values got from recom model computation - cached: {top_k_probs}  for user: {our_user_id} - ID RECBOLE: {user_id_recbole}\n")
+                
                 self.top_k_users_scores[curr_epoch][user_id_recbole] = {}
                 self.all_users_scores[curr_epoch][user_id_recbole] = {}
                 self.all_users_scores[curr_epoch][user_id_recbole]["tot_scores"] = shifted_scores.cpu().numpy()
@@ -1070,8 +1247,6 @@ class AmazonBooksFeedbackLoop():
                 print(f"\n User: {our_user_id} suggestions contain NaN: {arr}")
                 raise ValueError(f"\n Probabilities array given by recommender model contains Nan values")
             
-            # print(top_k_probs)
-            # exit()
             local_selected_index = int(self.rng.choice(len(top_k_probs), p=top_k_probs.cpu().numpy()))
             selected = int(top_k_indices[local_selected_index])
             while selected == 0:

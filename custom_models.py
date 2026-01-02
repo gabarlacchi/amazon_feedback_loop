@@ -1,11 +1,11 @@
-from recbole.model.abstract_recommender import GeneralRecommender
+from recbole.model.abstract_recommender import GeneralRecommender, ContextRecommender
 from recbole.model.general_recommender.itemknn import ComputeSimilarity
 from recbole.utils import InputType, ModelType
 from recbole.model.loss import BPRLoss, EmbLoss
 from recbole.model.init import xavier_uniform_initialization
 from recbole.data.interaction import Interaction
 from recbole.model.init import xavier_normal_initialization
-from recbole.model.layers import MLPLayers
+from recbole.model.layers import MLPLayers, BaseFactorizationMachine
 from torch.nn.init import normal_
 
 import torch.nn as nn
@@ -478,168 +478,720 @@ class SpectralCF(GeneralRecommender):
 
         scores = torch.matmul(u_embeddings, self.restore_item_e.transpose(0, 1))
         return scores.view(-1)
-    
-class ItemKNN(GeneralRecommender):
-    """
-    ItemKNN - Item-based collaborative filtering.
-    This is a convenience wrapper that sets knn_method='item'.
-    """
-    input_type = InputType.POINTWISE
-    type = ModelType.TRADITIONAL
-    
-    def __init__(self, config, dataset):
-        # Force item-based method
-        config["knn_method"] = "item"
-        
-        # Load parameters
-        self.k = config["k"]
-        self.method = "item"
-        self.shrink = config["shrink"]
-        
-        super(ItemKNN, self).__init__(config, dataset)
-        
-        # Get interaction matrix (users x items)
-        self.interaction_matrix = dataset.inter_matrix(form="csr").astype(np.float32)
-        shape = self.interaction_matrix.shape
-        assert self.n_users == shape[0] and self.n_items == shape[1]
-        
-        # Compute item-item similarity matrix
-        # Transpose to get (items x users) for item-based similarity
-        _, self.w = ComputeSimilarity(
-            self.interaction_matrix.T,  # Transpose for item-based
-            topk=self.k,
-            shrink=self.shrink,
-            method=self.method
-        ).compute_similarity()
-        
-        # Pre-compute prediction matrix (item-based)
-        # Users x Items = (Users x Items) x (Items x Items)
-        self.pred_mat = self.interaction_matrix.dot(self.w).tolil()
-        
-        # Fake loss for compatibility
-        self.fake_loss = torch.nn.Parameter(torch.zeros(1))
-        self.other_parameter_name = ["w", "pred_mat"]
-    
-    def forward(self, user, item):
-        """Forward pass."""
-        user = user.cpu().numpy()
-        item = item.cpu().numpy()
-        
-        result = []
-        for u, i in zip(user, item):
-            result.append(self.pred_mat[u, i])
-        
-        return torch.FloatTensor(result).to(self.device)
-    
-    def calculate_loss(self, interaction):
-        """Returns fake loss."""
-        return torch.nn.Parameter(torch.zeros(1)).to(self.device)
-    
-    def predict(self, interaction):
-        """Predict scores for user-item pairs."""
-        user = interaction[self.USER_ID]
-        item = interaction[self.ITEM_ID]
-        
-        user = user.cpu().numpy().astype(int)
-        item = item.cpu().numpy().astype(int)
-        
-        result = []
-        for u, i in zip(user, item):
-            result.append(self.pred_mat[u, i])
-        
-        return torch.FloatTensor(result).to(self.device)
-    
-    def full_sort_predict(self, interaction):
-        """Predict scores for all items for given users."""
-        user = interaction[self.USER_ID]
-        user = user.cpu().numpy().astype(int)
-        
-        score_list = []
-        for u in user:
-            scores = self.pred_mat[u, :].toarray().flatten()
-            score_list.append(scores)
-        
-        result = torch.FloatTensor(np.array(score_list)).to(self.device)
-        return result.view(-1)
 
-class UserKNN(GeneralRecommender):
-    """
-    UserKNN - User-based collaborative filtering.
-    This is a convenience wrapper that sets knn_method='user'.
-    """
+
+class FM(ContextRecommender):
+
+    def __init__(self, config, dataset):
+        super(FM, self).__init__(config, dataset)
+
+        # Keep dataset reference for join() in full_sort_predict
+        self.dataset = dataset
+
+        self.USER_ID = dataset.uid_field
+        self.ITEM_ID = dataset.iid_field
+        self.LABEL = dataset.label_field
+
+        # Cache item/user counts
+        self.n_items = dataset.num(self.ITEM_ID)
+        self.n_users = dataset.num(self.USER_ID)
+
+        # Get embedding size from config
+        self.embedding_size = config['embedding_size']
+
+        # FM components
+        self.fm = BaseFactorizationMachine(reduce_sum=True)
+
+        self.num_feature_field = len(self.token_field_names) + len(self.float_field_names)
+
+        # First order linear layer (per-field scalar)
+        self.first_order_linear = nn.Embedding(self.num_feature_field, 1)
+        nn.init.normal_(self.first_order_linear.weight, mean=0, std=0.01)
+
+        # Global bias
+        self.bias = nn.Parameter(torch.zeros(1))
+
+        # Sigmoid for output
+        self.sigmoid = nn.Sigmoid()
+        self.loss = nn.BCEWithLogitsLoss()
+
+    def forward(self, interaction):
+        # [batch_size, num_field, embed_dim]
+        fm_all_embeddings = self.concat_embed_input_fields(interaction)
+
+        # First order
+        first_order = self.first_order_linear.weight.squeeze(1)  # [num_field]
+        first_order_output = torch.sum(
+            fm_all_embeddings * first_order.unsqueeze(0).unsqueeze(-1),
+            dim=(1, 2)
+        )  # [batch_size]
+
+        # Second order (FM interaction)
+        second_order_output = self.fm(fm_all_embeddings)  # [batch_size] or [batch_size, 1]
+        
+        # CRITICAL FIX: Ensure second_order is 1D
+        if second_order_output.dim() > 1:
+            second_order_output = second_order_output.squeeze(-1)
+        
+        # Combine
+        output = first_order_output + second_order_output + self.bias.squeeze()
+        
+        return output
+
+    def calculate_loss(self, interaction):
+        label = interaction[self.LABEL]
+        output = self.forward(interaction)
+        return self.loss(output, label)
+
+    def predict(self, interaction):
+        output = self.forward(interaction)
+        return self.sigmoid(output)
+
+    @torch.no_grad()
+    def full_sort_predict(self, interaction):
+
+        device = interaction[self.USER_ID].device
+        batch_size = interaction[self.USER_ID].size(0)
+        n_items = self.n_items
+        
+        # Join user features FIRST
+        interaction = self.dataset.join(interaction)
+        
+        # Update batch_size after join
+        batch_size = interaction[self.USER_ID].size(0)
+        
+        # Expand for all items
+        item_ids = torch.arange(n_items, device=device).unsqueeze(0).repeat(batch_size, 1)
+        item_ids_flat = item_ids.reshape(-1)
+
+        new_inter_dict = {}
+
+        for key in interaction.interaction:
+            if key == self.ITEM_ID:
+                continue
+            v = interaction[key]
+            reps = [n_items] + [1] * (v.dim() - 1)
+            new_inter_dict[key] = v.repeat(*reps).reshape(batch_size * n_items, *v.shape[1:])
+
+        if self.ITEM_ID in interaction.interaction:
+            dtype = interaction[self.ITEM_ID].dtype
+        else:
+            dtype = torch.long
+        new_inter_dict[self.ITEM_ID] = item_ids_flat.to(dtype=dtype)
+
+        full_inter = Interaction(new_inter_dict).to(device)
+        
+        # Join item features
+        full_inter = self.dataset.join(full_inter)
+        
+        # Forward pass
+        logits_flat = self.forward(full_inter)
+        
+        scores_flat = self.sigmoid(logits_flat)
+
+        # Reshape
+        scores = scores_flat.view(batch_size, n_items)
+        
+        if batch_size == 1:
+            scores = scores.squeeze(0)
+        
+        return scores
+
+class DeepFM(ContextRecommender):
+    def __init__(self, config, dataset):
+        super(DeepFM, self).__init__(config, dataset)
+        # Keep dataset reference for join() in full_sort_predict
+        self.dataset = dataset
+        self.USER_ID = dataset.uid_field
+        self.ITEM_ID = dataset.iid_field
+        self.LABEL = dataset.label_field
+        # Cache item/user counts
+        self.n_items = dataset.num(self.ITEM_ID)
+        self.n_users = dataset.num(self.USER_ID)
+        # Get embedding size from config
+        self.embedding_size = config['embedding_size']
+        
+        # FM components
+        self.fm = BaseFactorizationMachine(reduce_sum=True)
+        self.num_feature_field = len(self.token_field_names) + len(self.float_field_names)
+        
+        # First order linear layer (per-field scalar)
+        self.first_order_linear = nn.Embedding(self.num_feature_field, 1)
+        nn.init.normal_(self.first_order_linear.weight, mean=0, std=0.01)
+        
+        # Global bias
+        self.bias = nn.Parameter(torch.zeros(1))
+        
+        # Deep component (MLP) - using RecBole MLPLayers
+        self.mlp_hidden_size = config['mlp_hidden_size']  # list like [256, 128, 64]
+        self.dropout_prob = config['dropout_prob']  # float like 0.2
+        
+        # Input to MLP is flattened embeddings
+        input_size = self.num_feature_field * self.embedding_size
+        
+        # Use RecBole's MLPLayers if available, otherwise build manually
+        try:
+            from recbole.model.layers import MLPLayers
+            self.mlp = MLPLayers(
+                [input_size] + self.mlp_hidden_size,
+                self.dropout_prob,
+                activation='relu',
+                bn=True
+            )
+            self.deep_predict_layer = nn.Linear(self.mlp_hidden_size[-1], 1)
+        except ImportError:
+            # Manual implementation if MLPLayers not available
+            mlp_layers = []
+            for hidden_size in self.mlp_hidden_size:
+                mlp_layers.append(nn.Linear(input_size, hidden_size))
+                mlp_layers.append(nn.BatchNorm1d(hidden_size))
+                mlp_layers.append(nn.ReLU())
+                mlp_layers.append(nn.Dropout(self.dropout_prob))
+                input_size = hidden_size
+            self.mlp = nn.Sequential(*mlp_layers)
+            self.deep_predict_layer = nn.Linear(self.mlp_hidden_size[-1], 1)
+        
+        # Sigmoid for output
+        self.sigmoid = nn.Sigmoid()
+        self.loss = nn.BCEWithLogitsLoss()
     
+    def forward(self, interaction):
+        # [batch_size, num_field, embed_dim]
+        fm_all_embeddings = self.concat_embed_input_fields(interaction)
+        batch_size = fm_all_embeddings.size(0)
+        
+        # First order
+        first_order = self.first_order_linear.weight.squeeze(1)  # [num_field]
+        first_order_output = torch.sum(
+            fm_all_embeddings * first_order.unsqueeze(0).unsqueeze(-1),
+            dim=(1, 2)
+        )  # [batch_size]
+        
+        # Second order (FM interaction)
+        second_order_output = self.fm(fm_all_embeddings)  # [batch_size] or [batch_size, 1]
+        
+        # CRITICAL FIX: Ensure second_order is 1D
+        if second_order_output.dim() > 1:
+            second_order_output = second_order_output.squeeze(-1)
+        
+        # Deep component
+        # Flatten embeddings for MLP input
+        deep_input = fm_all_embeddings.view(batch_size, -1)  # [batch_size, num_field * embed_dim]
+        deep_output = self.mlp(deep_input)  # [batch_size, last_hidden_size]
+        deep_output = self.deep_predict_layer(deep_output).squeeze(-1)  # [batch_size]
+        
+        # Combine all components: y = w0 + first_order + second_order + deep
+        output = self.bias.squeeze() + first_order_output + second_order_output + deep_output
+        
+        return output
+    
+    def calculate_loss(self, interaction):
+        label = interaction[self.LABEL]
+        output = self.forward(interaction)
+        return self.loss(output, label)
+    
+    def predict(self, interaction):
+        output = self.forward(interaction)
+        return self.sigmoid(output)
+    
+    @torch.no_grad()
+    def full_sort_predict(self, interaction):
+        device = interaction[self.USER_ID].device
+        batch_size = interaction[self.USER_ID].size(0)
+        n_items = self.n_items
+        
+        # Join user features FIRST
+        interaction = self.dataset.join(interaction)
+        
+        # Update batch_size after join
+        batch_size = interaction[self.USER_ID].size(0)
+        
+        # Expand for all items
+        item_ids = torch.arange(n_items, device=device).unsqueeze(0).repeat(batch_size, 1)
+        item_ids_flat = item_ids.reshape(-1)
+        
+        new_inter_dict = {}
+        for key in interaction.interaction:
+            if key == self.ITEM_ID:
+                continue
+            v = interaction[key]
+            reps = [n_items] + [1] * (v.dim() - 1)
+            new_inter_dict[key] = v.repeat(*reps).reshape(batch_size * n_items, *v.shape[1:])
+        
+        if self.ITEM_ID in interaction.interaction:
+            dtype = interaction[self.ITEM_ID].dtype
+        else:
+            dtype = torch.long
+        
+        new_inter_dict[self.ITEM_ID] = item_ids_flat.to(dtype=dtype)
+        full_inter = Interaction(new_inter_dict).to(device)
+        
+        # Join item features
+        full_inter = self.dataset.join(full_inter)
+        
+        # Forward pass
+        logits_flat = self.forward(full_inter)
+        scores_flat = self.sigmoid(logits_flat)
+        
+        # Reshape
+        scores = scores_flat.view(batch_size, n_items)
+        
+        if batch_size == 1:
+            scores = scores.squeeze(0)
+        
+        return scores
+
+class ComputeSimilarity:
+    def __init__(self, dataMatrix, topk=100, shrink=0, method="item", normalize=True):
+        r"""Computes the cosine similarity of dataMatrix
+
+        If it is computed on :math:`URM=|users| \times |items|`, pass the URM.
+
+        If it is computed on :math:`ICM=|items| \times |features|`, pass the ICM transposed.
+
+        Args:
+            dataMatrix (scipy.sparse.csr_matrix): The sparse data matrix.
+            topk (int) : The k value in KNN.
+            shrink (int) :  hyper-parameter in calculate cosine distance.
+            method (str) : Calculate the similarity of users if method is 'user', otherwise, calculate the similarity of items.
+            normalize (bool):   If True divide the dot product by the product of the norms.
+        """
+
+        super(ComputeSimilarity, self).__init__()
+
+        self.shrink = shrink
+        self.normalize = normalize
+        self.method = method
+
+        self.n_rows, self.n_columns = dataMatrix.shape
+
+        if self.method == "user":
+            self.TopK = min(topk, self.n_rows)
+        else:
+            self.TopK = min(topk, self.n_columns)
+
+        self.dataMatrix = dataMatrix.copy()
+
+    def compute_similarity(self, block_size=100):
+        r"""Compute the similarity for the given dataset
+
+        Args:
+            block_size (int): divide matrix to :math:`n\_rows \div block\_size` to calculate cosine_distance if method is 'user',
+                 otherwise, divide matrix to :math:`n\_columns \div block\_size`.
+
+        Returns:
+
+            list: The similar nodes, if method is 'user', the shape is [number of users, neigh_num],
+            else, the shape is [number of items, neigh_num].
+            scipy.sparse.csr_matrix: sparse matrix W, if method is 'user', the shape is [self.n_rows, self.n_rows],
+            else, the shape is [self.n_columns, self.n_columns].
+        """
+
+        values = []
+        rows = []
+        cols = []
+        neigh = []
+
+        self.dataMatrix = self.dataMatrix.astype(np.float32)
+
+        # Compute sum of squared values to be used in normalization
+        if self.method == "user":
+            sumOfSquared = np.array(self.dataMatrix.power(2).sum(axis=1)).ravel()
+            end_local = self.n_rows
+        elif self.method == "item":
+            sumOfSquared = np.array(self.dataMatrix.power(2).sum(axis=0)).ravel()
+            end_local = self.n_columns
+        else:
+            raise NotImplementedError("Make sure 'method' in ['user', 'item']!")
+        sumOfSquared = np.sqrt(sumOfSquared)
+
+        start_block = 0
+
+        # Compute all similarities using vectorization
+        while start_block < end_local:
+            end_block = min(start_block + block_size, end_local)
+            this_block_size = end_block - start_block
+
+            # All data points for a given user or item
+            if self.method == "user":
+                data = self.dataMatrix[start_block:end_block, :]
+            else:
+                data = self.dataMatrix[:, start_block:end_block]
+            data = data.toarray()
+
+            # Compute similarities
+
+            if self.method == "user":
+                this_block_weights = self.dataMatrix.dot(data.T)
+            else:
+                this_block_weights = self.dataMatrix.T.dot(data)
+
+            for index_in_block in range(this_block_size):
+                this_line_weights = this_block_weights[:, index_in_block]
+
+                Index = index_in_block + start_block
+                this_line_weights[Index] = 0.0
+
+                # Apply normalization and shrinkage, ensure denominator != 0
+                if self.normalize:
+                    denominator = (
+                        sumOfSquared[Index] * sumOfSquared + self.shrink + 1e-6
+                    )
+                    this_line_weights = np.multiply(this_line_weights, 1 / denominator)
+
+                elif self.shrink != 0:
+                    this_line_weights = this_line_weights / self.shrink
+
+                # Sort indices and select TopK
+                # Sorting is done in three steps. Faster then plain np.argsort for higher number of users or items
+                # - Partition the data to extract the set of relevant users or items
+                # - Sort only the relevant users or items
+                # - Get the original index
+                relevant_partition = (-this_line_weights).argpartition(self.TopK - 1)[
+                    0 : self.TopK
+                ]
+                relevant_partition_sorting = np.argsort(
+                    -this_line_weights[relevant_partition]
+                )
+                top_k_idx = relevant_partition[relevant_partition_sorting]
+                neigh.append(top_k_idx)
+
+                # Incrementally build sparse matrix, do not add zeros
+                notZerosMask = this_line_weights[top_k_idx] != 0.0
+                numNotZeros = np.sum(notZerosMask)
+
+                values.extend(this_line_weights[top_k_idx][notZerosMask])
+                if self.method == "user":
+                    rows.extend(np.ones(numNotZeros) * Index)
+                    cols.extend(top_k_idx[notZerosMask])
+                else:
+                    rows.extend(top_k_idx[notZerosMask])
+                    cols.extend(np.ones(numNotZeros) * Index)
+
+            start_block += block_size
+
+        # End while
+        if self.method == "user":
+            W_sparse = sp.csr_matrix(
+                (values, (rows, cols)),
+                shape=(self.n_rows, self.n_rows),
+                dtype=np.float32,
+            )
+        else:
+            W_sparse = sp.csr_matrix(
+                (values, (rows, cols)),
+                shape=(self.n_columns, self.n_columns),
+                dtype=np.float32,
+            )
+        return neigh, W_sparse.tocsc()
+
+class ItemKNN(GeneralRecommender):
+    r"""ItemKNN is a basic model that compute item similarity with the interaction matrix.
+    Adjusting the value of 'knn_method' in the config file sets the method to either ItemKNN or UserKNN, respectively.
+    """
+
     input_type = InputType.POINTWISE
     type = ModelType.TRADITIONAL
-    
+
+    # BINARY VERSION
+    # def __init__(self, config, dataset):
+    #     super(ItemKNN, self).__init__(config, dataset)
+        
+    #     # load parameters info
+    #     self.k = config["k"]
+    #     self.method = "item"
+    #     self.shrink = config["shrink"] if "shrink" in config else 0.0
+        
+    #     # Load interaction matrix
+    #     self.interaction_matrix = dataset.inter_matrix(form="csr").astype(np.float32)
+        
+    #     # BINARIZE: Convert any non-zero value to 1
+    #     self.interaction_matrix.data = np.ones_like(self.interaction_matrix.data)
+        
+    #     # Optional: Verify binarization
+    #     print(f"Unique values after binarization: {np.unique(self.interaction_matrix.data)}")
+        
+    #     shape = self.interaction_matrix.shape
+    #     assert self.n_users == shape[0] and self.n_items == shape[1]
+        
+    #     _, self.w = ComputeSimilarity(
+    #         self.interaction_matrix, topk=self.k, shrink=self.shrink, method=self.method
+    #     ).compute_similarity()
+        
+    #     if self.method == "user":
+    #         self.pred_mat = self.w.dot(self.interaction_matrix).tolil()
+    #     else:
+    #         self.pred_mat = self.interaction_matrix.dot(self.w).tocsr()
+        
+    #     self.fake_loss = torch.nn.Parameter(torch.zeros(1))
+    #     self.other_parameter_name = ["w", "pred_mat"]
+
     def __init__(self, config, dataset):
-        # Force user-based method
-        config["knn_method"] = "user"
-        
-        # Load parameters
+        super(ItemKNN, self).__init__(config, dataset)
+
+        # load parameters info
         self.k = config["k"]
-        self.method = "user"
-        self.shrink = config["shrink"]
-        
-        super(UserKNN, self).__init__(config, dataset)
-        
-        # Get interaction matrix
+        # self.method = config["knn_method"]
+        self.method = "item"
+        self.shrink = config["shrink"] if "shrink" in config else 0.0
         self.interaction_matrix = dataset.inter_matrix(form="csr").astype(np.float32)
+
         shape = self.interaction_matrix.shape
         assert self.n_users == shape[0] and self.n_items == shape[1]
-        
-        # Compute similarity matrix
         _, self.w = ComputeSimilarity(
-            self.interaction_matrix,
-            topk=self.k,
-            shrink=self.shrink,
-            method=self.method
+            self.interaction_matrix, topk=self.k, shrink=self.shrink, method=self.method
         ).compute_similarity()
-        
-        # Pre-compute prediction matrix (user-based)
-        self.pred_mat = self.w.dot(self.interaction_matrix).tolil()
-        
-        # Fake loss for compatibility
+
+        if self.method == "user":
+            self.pred_mat = self.w.dot(self.interaction_matrix).tolil()
+        else:
+            # self.pred_mat = self.interaction_matrix.dot(self.w).tolil()
+            self.pred_mat = self.interaction_matrix.dot(self.w).tocsr()
+
         self.fake_loss = torch.nn.Parameter(torch.zeros(1))
         self.other_parameter_name = ["w", "pred_mat"]
     
     def forward(self, user, item):
-        """Forward pass."""
-        user = user.cpu().numpy()
-        item = item.cpu().numpy()
-        result = []
-        
-        for u, i in zip(user, item):
-            result.append(self.pred_mat[u, i])
-            
-        return torch.FloatTensor(result).to(self.device)
-    
+        pass
+
     def calculate_loss(self, interaction):
-        """Returns fake loss."""
-        return torch.nn.Parameter(torch.zeros(1)).to(self.device)
-    
+        return torch.nn.Parameter(torch.zeros(1))
+
     def predict(self, interaction):
-        """Predict scores for user-item pairs."""
         user = interaction[self.USER_ID]
         item = interaction[self.ITEM_ID]
-        
         user = user.cpu().numpy().astype(int)
         item = item.cpu().numpy().astype(int)
-        
         result = []
-        for u, i in zip(user, item):
-            result.append(self.pred_mat[u, i])
+
+        for index in range(len(user)):
+            uid = user[index]
+            iid = item[index]
+            score = self.pred_mat[uid, iid]
             
-        return torch.FloatTensor(result).to(self.device)
-    
+            # Properly extract scalar from sparse matrix
+            if isinstance(score, np.ndarray):
+                score = score.item() if score.size == 1 else score[0]
+            elif hasattr(score, 'toarray'):
+                score = score.toarray()[0, 0]
+            
+            result.append(float(score))  # Ensure it's a Python float
+        
+        result = torch.tensor(result, dtype=torch.float32).to(self.device)
+        return result
+
+    # def predict(self, interaction):
+    #     user = interaction[self.USER_ID]
+    #     item = interaction[self.ITEM_ID]
+    #     user = user.cpu().numpy().astype(int)
+    #     item = item.cpu().numpy().astype(int)
+    #     result = []
+
+    #     for index in range(len(user)):
+    #         uid = user[index]
+    #         iid = item[index]
+    #         score = self.pred_mat[uid, iid]
+    #         result.append(score)
+    #     result = torch.from_numpy(np.array(result)).to(self.device)
+    #     return result
+
     def full_sort_predict(self, interaction):
-        """Predict scores for all items."""
         user = interaction[self.USER_ID]
+        user = user.cpu().numpy()
+        score = self.pred_mat[user, :].toarray().flatten()
+        result = torch.from_numpy(score).to(self.device)
+
+        return result
+    
+class UserKNN(GeneralRecommender):
+    
+    input_type = InputType.POINTWISE
+    type = ModelType.TRADITIONAL
+
+    def __init__(self, config, dataset):
+        super(UserKNN, self).__init__(config, dataset)
+
+        # load parameters info
+        self.k = config["k"]
+        self.method = "user"  # This is the key difference from ItemKNN
+        self.shrink = config["shrink"] if "shrink" in config else 0.0
+
+        self.interaction_matrix = dataset.inter_matrix(form="csr").astype(np.float32)
+        shape = self.interaction_matrix.shape
+        assert self.n_users == shape[0] and self.n_items == shape[1]
+        
+        # Compute user-user similarity matrix
+        _, self.w = ComputeSimilarity(
+            self.interaction_matrix, topk=self.k, shrink=self.shrink, method=self.method
+        ).compute_similarity()
+
+        # For UserKNN: W is [n_users x n_users], so we do W.dot(interaction_matrix)
+        # Result: [n_users x n_items]
+        self.pred_mat = self.w.dot(self.interaction_matrix).tocsr()
+
+        self.fake_loss = torch.nn.Parameter(torch.zeros(1))
+        self.other_parameter_name = ["w", "pred_mat"]
+    
+    def forward(self, user, item):
+        pass
+
+    def calculate_loss(self, interaction):
+        return torch.nn.Parameter(torch.zeros(1))
+
+    def predict(self, interaction):
+        user = interaction[self.USER_ID]
+        item = interaction[self.ITEM_ID]
         user = user.cpu().numpy().astype(int)
+        item = item.cpu().numpy().astype(int)
+        result = []
+
+        for index in range(len(user)):
+            uid = user[index]
+            iid = item[index]
+            score = self.pred_mat[uid, iid]
+            
+            # Properly extract scalar from sparse matrix
+            if isinstance(score, np.ndarray):
+                score = score.item() if score.size == 1 else score[0]
+            elif hasattr(score, 'toarray'):
+                score = score.toarray()[0, 0]
+            
+            result.append(float(score))  # Ensure it's a Python float
         
-        score_list = []
-        for u in user:
-            scores = self.pred_mat[u, :].toarray().flatten()
-            score_list.append(scores)
+        result = torch.tensor(result, dtype=torch.float32).to(self.device)
+        return result
+
+    def full_sort_predict(self, interaction):
+        user = interaction[self.USER_ID]
+        user = user.cpu().numpy()
+
+        score = self.pred_mat[user, :].toarray().flatten()
+        result = torch.from_numpy(score).to(self.device)
+
+        return result
+
+class EASE(GeneralRecommender):
+    r"""EASE (Embarrassingly Shallow Autoencoders for Sparse Data)
+    
+    A linear autoencoder model that learns item-item similarities with a closed-form solution.
+    
+    Reference:
+        Harald Steck. "Embarrassingly Shallow Autoencoders for Sparse Data." in WWW 2019.
+    """
+
+    input_type = InputType.POINTWISE
+    type = ModelType.TRADITIONAL
+
+    def __init__(self, config, dataset):
+        super(EASE, self).__init__(config, dataset)
+
+        # Load parameters
+        self.reg_weight = config["reg_weight"] if "reg_weight" in config else 500.0
         
-        result = torch.FloatTensor(np.array(score_list)).to(self.device)
-        return result.view(-1)
+        # Load interaction matrix (users x items)
+        self.interaction_matrix = dataset.inter_matrix(form="csr").astype(np.float32)
+        
+        # Binarize the interaction matrix
+        self.interaction_matrix.data = np.ones_like(self.interaction_matrix.data)
+        
+        shape = self.interaction_matrix.shape
+        assert self.n_users == shape[0] and self.n_items == shape[1]
+        
+        print(f"Training EASE with {self.n_users} users and {self.n_items} items")
+        print(f"Regularization weight: {self.reg_weight}")
+        
+        # Compute EASE item-item similarity matrix
+        self.item_similarity = self._compute_ease_weights()
+        
+        # Precompute prediction matrix (users x items)
+        print("Computing prediction matrix...")
+        self.pred_mat = self.interaction_matrix.dot(self.item_similarity).tocsr()
+        print("Prediction matrix computed")
+        
+        # Dummy parameters for RecBole compatibility
+        self.fake_loss = torch.nn.Parameter(torch.zeros(1))
+        self.other_parameter_name = ["item_similarity", "pred_mat"]
+
+    def _compute_ease_weights(self):
+        """
+        Compute EASE item-item similarity weights using closed-form solution.
+        
+        The EASE model solves:
+        B = argmin ||X - XB||^2 + λ||B||^2
+        subject to diag(B) = 0
+        
+        Where X is the user-item interaction matrix.
+        """
+        print("Computing EASE weights...")
+        
+        # Convert to dense for computation (only practical for smaller datasets)
+        # For large datasets, you might need a sparse implementation
+        X = self.interaction_matrix.toarray()
+        
+        # Compute Gram matrix: G = X^T X
+        G = X.T.dot(X)
+        
+        # Add regularization to diagonal
+        diag_indices = np.diag_indices(G.shape[0])
+        G[diag_indices] += self.reg_weight
+        
+        # Solve for P: P = (X^T X + λI)^(-1)
+        print("Inverting Gram matrix...")
+        try:
+            P = np.linalg.inv(G)
+        except np.linalg.LinAlgError:
+            print("Matrix inversion failed, using pseudo-inverse...")
+            P = np.linalg.pinv(G)
+        
+        # Compute B from P
+        B = P / (-np.diag(P))
+        
+        # Set diagonal to zero (as per EASE constraint)
+        B[diag_indices] = 0.0
+        
+        print("EASE weights computed")
+        
+        # Convert to sparse matrix for efficiency
+        return sp.csr_matrix(B)
+
+    def forward(self, user, item):
+        pass
+
+    def calculate_loss(self, interaction):
+        """EASE has no training loss as it uses closed-form solution"""
+        return torch.nn.Parameter(torch.zeros(1))
+
+    def predict(self, interaction):
+        user = interaction[self.USER_ID]
+        item = interaction[self.ITEM_ID]
+        user = user.cpu().numpy().astype(int)
+        item = item.cpu().numpy().astype(int)
+        result = []
+
+        for index in range(len(user)):
+            uid = user[index]
+            iid = item[index]
+            score = self.pred_mat[uid, iid]
+            
+            # Properly extract scalar from sparse matrix
+            if isinstance(score, np.ndarray):
+                score = score.item() if score.size == 1 else score[0]
+            elif hasattr(score, 'toarray'):
+                score = score.toarray()[0, 0]
+            else:
+                score = float(score)
+            
+            result.append(float(score))
+        
+        result = torch.tensor(result, dtype=torch.float32).to(self.device)
+        return result
+
+    def full_sort_predict(self, interaction):
+        user = interaction[self.USER_ID]
+        user = user.cpu().numpy()
+        
+        # Get scores for all items for the given users
+        score = self.pred_mat[user, :].toarray().flatten()
+        result = torch.from_numpy(score).to(self.device)
+        
+        return result
