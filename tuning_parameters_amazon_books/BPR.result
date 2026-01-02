@@ -1,0 +1,6 @@
+learning_rate:0.03612778711109757, reg_weight:0.0014667078632898296
+Valid result:
+ndcg@10 : 0.0044    recall@10 : 0.0042    precision@10 : 0.0008    hit@10 : 0.0059    itemcoverage@10 : 0.3465    mrr@10 : 0.0049    map@10 : 0.0042
+Test result:
+ndcg@10 : 0.0002    recall@10 : 0.0005    precision@10 : 0.0002    hit@10 : 0.0019    itemcoverage@10 : 0.3457    mrr@10 : 0.0003    map@10 : 0.0001
+

@@ -1,17 +1,17 @@
 {
-    "dataset": "amazon_e_commerce",
-    "recbole_folder": "models_tmp_2",
+    "dataset": "amazon_books",
+    "recbole_folder": "models_tmp_3",
     "frequent_costumers": true,
     "random_sample_users": false,
-    "time_window": "2018-2022",
+    "time_window": "2018-2023",
     "experiment_mode": "p-validation",
     "n_reps": 1,
     "use_cache": true,
     "recommender_model": {
-        "model_name": "EASE",
-        "epochs": 25,
-        "learning_rate": 0.02,
-        "reg_weight": 250.0
+        "model_name": "CF_KNN_item",
+        "epochs": 1,
+        "k": 100,
+        "shrink": 0.0
     },
     "user_strategy": {
         "model_name": "Custom choice model",
