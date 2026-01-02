@@ -25,6 +25,10 @@ def main(args: argparse):
 
     config = DotDict(config)
 
+    print(config)
+
+    exit()
+
     if config.dataset == "amazon_e_commerce":
         if not os.path.exists(RESULTS_PATH_AMAZON):
             os.makedirs(RESULTS_PATH_AMAZON)
