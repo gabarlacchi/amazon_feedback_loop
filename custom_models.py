@@ -479,39 +479,36 @@ class SpectralCF(GeneralRecommender):
         scores = torch.matmul(u_embeddings, self.restore_item_e.transpose(0, 1))
         return scores.view(-1)
 
-
 class FM(ContextRecommender):
-
+    
     def __init__(self, config, dataset):
         super(FM, self).__init__(config, dataset)
-
-        # Keep dataset reference for join() in full_sort_predict
+        
         self.dataset = dataset
-
         self.USER_ID = dataset.uid_field
         self.ITEM_ID = dataset.iid_field
         self.LABEL = dataset.label_field
-
-        # Cache item/user counts
+        
         self.n_items = dataset.num(self.ITEM_ID)
         self.n_users = dataset.num(self.USER_ID)
-
-        # Get embedding size from config
         self.embedding_size = config['embedding_size']
-
-        # FM components
+        
         self.fm = BaseFactorizationMachine(reduce_sum=True)
-
+        
+        # FIXED: Get the actual number of fields from the embedding field names
+        # This includes user_id, item_id, and all other features
         self.num_feature_field = len(self.token_field_names) + len(self.float_field_names)
-
-        # First order linear layer (per-field scalar)
+        
+        # If token/float fields don't include user_id and item_id, add them
+        if self.USER_ID not in self.token_field_names:
+            self.num_feature_field += 1
+        if self.ITEM_ID not in self.token_field_names:
+            self.num_feature_field += 1
+        
         self.first_order_linear = nn.Embedding(self.num_feature_field, 1)
         nn.init.normal_(self.first_order_linear.weight, mean=0, std=0.01)
-
-        # Global bias
+        
         self.bias = nn.Parameter(torch.zeros(1))
-
-        # Sigmoid for output
         self.sigmoid = nn.Sigmoid()
         self.loss = nn.BCEWithLogitsLoss()
 
@@ -519,13 +516,16 @@ class FM(ContextRecommender):
         # [batch_size, num_field, embed_dim]
         fm_all_embeddings = self.concat_embed_input_fields(interaction)
 
-        # First order
-        first_order = self.first_order_linear.weight.squeeze(1)  # [num_field]
+        # DYNAMIC: Get actual number of fields from the embeddings
+        actual_num_fields = fm_all_embeddings.size(1)
+        
+        # First order - use only the fields that actually exist
+        first_order = self.first_order_linear.weight[:actual_num_fields].squeeze(1)  # [actual_num_fields]
         first_order_output = torch.sum(
             fm_all_embeddings * first_order.unsqueeze(0).unsqueeze(-1),
             dim=(1, 2)
         )  # [batch_size]
-
+        
         # Second order (FM interaction)
         second_order_output = self.fm(fm_all_embeddings)  # [batch_size] or [batch_size, 1]
         
@@ -535,7 +535,6 @@ class FM(ContextRecommender):
         
         # Combine
         output = first_order_output + second_order_output + self.bias.squeeze()
-        
         return output
 
     def calculate_loss(self, interaction):
@@ -592,6 +591,284 @@ class FM(ContextRecommender):
         # Reshape
         scores = scores_flat.view(batch_size, n_items)
         
+        if batch_size == 1:
+            scores = scores.squeeze(0)
+        
+        return scores
+
+class CrossNetworkV2(nn.Module):
+
+
+    """Cross Network V2 with mixture of experts."""
+    
+    def __init__(self, input_dim, num_layers, low_rank=32, num_experts=4):
+        super(CrossNetworkV2, self).__init__()
+        self.num_layers = num_layers
+        self.low_rank = low_rank
+        self.num_experts = num_experts
+        
+        # Mixture of experts for each layer
+        self.expert_weights = nn.ModuleList([
+            nn.Linear(input_dim, low_rank * num_experts, bias=False)
+            for _ in range(num_layers)
+        ])
+        
+        self.expert_bias = nn.ParameterList([
+            nn.Parameter(torch.zeros(input_dim, num_experts))
+            for _ in range(num_layers)
+        ])
+        
+        self.gate = nn.ModuleList([
+            nn.Linear(input_dim, 1, bias=False)
+            for _ in range(num_layers)
+        ])
+        
+        # V matrices for low-rank approximation
+        self.v_weights = nn.ParameterList([
+            nn.Parameter(torch.randn(input_dim, low_rank))
+            for _ in range(num_layers)
+        ])
+        
+        # Initialize weights
+        for i in range(num_layers):
+            nn.init.xavier_normal_(self.expert_weights[i].weight)
+            nn.init.xavier_normal_(self.v_weights[i])
+            nn.init.zeros_(self.gate[i].weight)
+    
+    def forward(self, x0):
+        """
+        Args:
+            x0: [batch_size, input_dim]
+        Returns:
+            x: [batch_size, input_dim]
+        """
+        x = x0
+        for i in range(self.num_layers):
+            # Expert outputs: [batch_size, low_rank * num_experts]
+            expert_out = self.expert_weights[i](x)
+            
+            # Reshape to [batch_size, low_rank, num_experts]
+            expert_out = expert_out.view(-1, self.low_rank, self.num_experts)
+            
+            # Gate: [batch_size, 1]
+            gate_out = self.gate[i](x)
+            gate_out = torch.softmax(gate_out, dim=-1)  # [batch_size, 1]
+            
+            # Mix experts: [batch_size, low_rank, num_experts] @ [batch_size, num_experts, 1]
+            # -> [batch_size, low_rank, 1] -> [batch_size, low_rank]
+            gate_out_expanded = gate_out.unsqueeze(1)  # [batch_size, 1, 1]
+            gated_expert = (expert_out * gate_out_expanded).sum(dim=2)  # [batch_size, low_rank]
+            
+            # Low-rank transformation: [batch_size, low_rank] @ [low_rank, input_dim]^T
+            # -> [batch_size, input_dim]
+            cross_out = torch.matmul(gated_expert, self.v_weights[i].t())
+            
+            # Add bias
+            bias_out = (self.expert_bias[i] * gate_out_expanded).sum(dim=2)  # [batch_size, input_dim]
+            cross_out = cross_out + bias_out
+            
+            # Element-wise product with x0 and add x
+            x = x0 * cross_out + x
+        
+        return x
+
+class DCNV2(ContextRecommender):
+    """Deep & Cross Network V2 for CTR prediction."""
+    
+    input_type = InputType.POINTWISE
+    
+    def __init__(self, config, dataset):
+        super(DCNV2, self).__init__(config, dataset)
+        
+        # Keep dataset reference for join() in full_sort_predict
+        self.dataset = dataset
+        self.USER_ID = dataset.uid_field
+        self.ITEM_ID = dataset.iid_field
+        self.LABEL = dataset.label_field
+        
+        # Cache item/user counts
+        self.n_items = dataset.num(self.ITEM_ID)
+        self.n_users = dataset.num(self.USER_ID)
+        
+        # Get embedding size from config
+        self.embedding_size = config['embedding_size']
+        
+        # Number of feature fields
+        self.num_feature_field = len(self.token_field_names) + len(self.float_field_names)
+        
+        # Input dimension for cross and deep networks
+        self.input_dim = self.num_feature_field * self.embedding_size
+
+        DEFAULT_CONFIG = {
+            'cross_layer_num': 3,
+            'low_rank': 32,
+            'num_experts': 4,
+            'mlp_hidden_size': [256, 128, 64],
+            'reg_weight': 1e-5,
+            'structure': 'parallel'
+        }
+        
+        # Cross Network V2 parameters
+        self.cross_layer_num = config['cross_layer_num'] if 'cross_layer_num' in config else DEFAULT_CONFIG['cross_layer_num']
+        self.low_rank = config['low_rank'] if 'low_rank' in config else DEFAULT_CONFIG['low_rank']
+        self.num_experts = config['num_experts'] if 'num_experts' in config else DEFAULT_CONFIG['num_experts']
+        self.mlp_hidden_size = config['mlp_hidden_size'] if 'mlp_hidden_size' in config else DEFAULT_CONFIG['mlp_hidden_size']
+        self.reg_weight = config['reg_weight'] if 'reg_weight' in config else DEFAULT_CONFIG['reg_weight']
+        self.structure = config['structure'] if 'structure' in config else DEFAULT_CONFIG['structure']
+        self.dropout_prob = config['dropout_prob'] if 'dropout_prob' in config else 0.2
+        
+        # Cross Network V2
+        self.cross_network = CrossNetworkV2(
+            input_dim=self.input_dim,
+            num_layers=self.cross_layer_num,
+            low_rank=self.low_rank,
+            num_experts=self.num_experts
+        )
+        
+        # Deep Network (MLP)
+        if self.structure == 'parallel':
+            # Parallel structure: cross and deep networks are parallel
+            self.mlp = MLPLayers(
+                [self.input_dim] + self.mlp_hidden_size,
+                self.dropout_prob,
+                activation='relu',
+                bn=True
+            )
+            # Combine cross and deep outputs
+            combine_dim = self.input_dim + self.mlp_hidden_size[-1]
+        else:
+            # Stacked structure: deep network on top of cross network
+            self.mlp = MLPLayers(
+                [self.input_dim] + self.mlp_hidden_size,
+                self.dropout_prob,
+                activation='relu',
+                bn=True
+            )
+            combine_dim = self.mlp_hidden_size[-1]
+        
+        # Final prediction layer
+        self.predict_layer = nn.Linear(combine_dim, 1)
+        
+        # Activation and loss
+        self.sigmoid = nn.Sigmoid()
+        self.loss = nn.BCEWithLogitsLoss()
+        
+        # Initialize prediction layer
+        nn.init.xavier_normal_(self.predict_layer.weight)
+        nn.init.zeros_(self.predict_layer.bias)
+    
+    def forward(self, interaction):
+        """
+        Args:
+            interaction: Interaction object
+        Returns:
+            output: [batch_size] prediction scores (logits)
+        """
+        # Get embeddings: [batch_size, num_field, embed_dim]
+        embed_input = self.concat_embed_input_fields(interaction)
+        batch_size = embed_input.size(0)
+        
+        # Flatten embeddings: [batch_size, num_field * embed_dim]
+        flat_input = embed_input.view(batch_size, -1)
+        
+        if self.structure == 'parallel':
+            # Parallel structure
+            # Cross network output
+            cross_out = self.cross_network(flat_input)  # [batch_size, input_dim]
+            
+            # Deep network output
+            deep_out = self.mlp(flat_input)  # [batch_size, mlp_hidden_size[-1]]
+            
+            # Concatenate
+            combined = torch.cat([cross_out, deep_out], dim=1)
+        else:
+            # Stacked structure
+            # Cross network output
+            cross_out = self.cross_network(flat_input)  # [batch_size, input_dim]
+            
+            # Deep network on top of cross output
+            deep_out = self.mlp(cross_out)  # [batch_size, mlp_hidden_size[-1]]
+            
+            combined = deep_out
+        
+        # Final prediction
+        output = self.predict_layer(combined).squeeze(-1)  # [batch_size]
+        
+        return output
+    
+    def calculate_loss(self, interaction):
+        """Calculate loss for training."""
+        label = interaction[self.LABEL]
+        output = self.forward(interaction)
+        
+        # BCE loss
+        bce_loss = self.loss(output, label)
+        
+        # L2 regularization
+        l2_loss = self.reg_weight * sum(
+            torch.sum(param ** 2) for param in self.parameters()
+        )
+        
+        return bce_loss + l2_loss
+    
+    def predict(self, interaction):
+        """Predict for evaluation."""
+        output = self.forward(interaction)
+        return self.sigmoid(output)
+    
+    @torch.no_grad()
+    def full_sort_predict(self, interaction):
+        """
+        Full sort prediction for ranking all items.
+        
+        Args:
+            interaction: User interaction with user features
+        Returns:
+            scores: [batch_size, n_items] or [n_items] if batch_size=1
+        """
+        device = interaction[self.USER_ID].device
+        batch_size = interaction[self.USER_ID].size(0)
+        n_items = self.n_items
+        
+        # Join user features FIRST
+        interaction = self.dataset.join(interaction)
+        
+        # Update batch_size after join
+        batch_size = interaction[self.USER_ID].size(0)
+        
+        # Expand for all items
+        item_ids = torch.arange(n_items, device=device).unsqueeze(0).repeat(batch_size, 1)
+        item_ids_flat = item_ids.reshape(-1)
+        
+        # Create new interaction with all user-item pairs
+        new_inter_dict = {}
+        for key in interaction.interaction:
+            if key == self.ITEM_ID:
+                continue
+            v = interaction[key]
+            reps = [n_items] + [1] * (v.dim() - 1)
+            new_inter_dict[key] = v.repeat(*reps).reshape(batch_size * n_items, *v.shape[1:])
+        
+        # Add item IDs
+        if self.ITEM_ID in interaction.interaction:
+            dtype = interaction[self.ITEM_ID].dtype
+        else:
+            dtype = torch.long
+        
+        new_inter_dict[self.ITEM_ID] = item_ids_flat.to(dtype=dtype)
+        full_inter = Interaction(new_inter_dict).to(device)
+        
+        # Join item features
+        full_inter = self.dataset.join(full_inter)
+        
+        # Forward pass
+        logits_flat = self.forward(full_inter)
+        scores_flat = self.sigmoid(logits_flat)
+        
+        # Reshape to [batch_size, n_items]
+        scores = scores_flat.view(batch_size, n_items)
+        
+        # If single user, squeeze batch dimension
         if batch_size == 1:
             scores = scores.squeeze(0)
         
@@ -741,6 +1018,210 @@ class DeepFM(ContextRecommender):
         
         return scores
 
+class NFM(ContextRecommender):
+    """
+    Neural Factorization Machine for Recommendation
+    
+    Combines:
+    - Linear part (1st order)
+    - Bi-Interaction pooling (2nd order, like FM)
+    - Deep neural network on interactions
+    
+    Reference:
+        He and Chua. "Neural Factorization Machines for Sparse Predictive Analytics" SIGIR 2017
+    
+    Simpler than xDeepFM, more powerful than FM/DeepFM
+    """
+    
+    def __init__(self, config, dataset):
+        super(NFM, self).__init__(config, dataset)
+        
+        # Keep dataset reference for join() in full_sort_predict
+        self.dataset = dataset
+        self.USER_ID = dataset.uid_field
+        self.ITEM_ID = dataset.iid_field
+        self.LABEL = dataset.label_field
+        
+        # Cache item/user counts
+        self.n_items = dataset.num(self.ITEM_ID)
+        self.n_users = dataset.num(self.USER_ID)
+        
+        # Get config parameters
+        self.embedding_size = config['embedding_size']
+        self.mlp_hidden_size = config['mlp_hidden_size'] if 'mlp_hidden_size' in config else [128, 64]
+        self.dropout = config['dropout_prob'] if 'dropout_prob' in config else 0.1
+        
+        # Number of feature fields
+        self.num_feature_field = len(self.token_field_names) + len(self.float_field_names)
+        
+        # === Linear Part (First Order) ===
+        self.first_order_linear = nn.Embedding(self.num_feature_field, 1)
+        nn.init.normal_(self.first_order_linear.weight, mean=0, std=0.01)
+        
+        # === Bi-Interaction Layer ===
+        # This is the key innovation: element-wise product pooling
+        # No parameters needed, just operations on embeddings
+        
+        # === Deep Neural Network ===
+        # Input: embedding_size (after bi-interaction pooling)
+        # Output: final hidden layer
+        self.dnn_layers = nn.ModuleList()
+        prev_dim = self.embedding_size
+        
+        for hidden_dim in self.mlp_hidden_size:
+            self.dnn_layers.append(nn.Linear(prev_dim, hidden_dim))
+            self.dnn_layers.append(nn.BatchNorm1d(hidden_dim))
+            self.dnn_layers.append(nn.ReLU())
+            self.dnn_layers.append(nn.Dropout(self.dropout))
+            prev_dim = hidden_dim
+        
+        # === Final Prediction Layer ===
+        # Combine linear + DNN output
+        self.prediction_layer = nn.Linear(self.mlp_hidden_size[-1], 1)
+        
+        # Global bias
+        self.bias = nn.Parameter(torch.zeros(1))
+        
+        # Output activation and loss
+        self.sigmoid = nn.Sigmoid()
+        self.loss = nn.BCEWithLogitsLoss()
+    
+    def bi_interaction_pooling(self, embeddings):
+        """
+        Bi-Interaction Pooling Layer
+        
+        Captures 2nd-order feature interactions efficiently:
+        sum(vi * vj) for all i < j
+        
+        Equivalent to: 0.5 * (sum(vi)^2 - sum(vi^2))
+        
+        Args:
+            embeddings: [batch_size, num_fields, embed_dim]
+            
+        Returns:
+            pooled: [batch_size, embed_dim]
+        """
+        # Sum of embeddings: [batch_size, embed_dim]
+        sum_of_embeddings = torch.sum(embeddings, dim=1)
+        
+        # Sum of squared embeddings: [batch_size, embed_dim]
+        sum_of_squared_embeddings = torch.sum(embeddings ** 2, dim=1)
+        
+        # Square of sum: [batch_size, embed_dim]
+        square_of_sum = sum_of_embeddings ** 2
+        
+        # Bi-interaction: 0.5 * (square_of_sum - sum_of_squares)
+        bi_interaction = 0.5 * (square_of_sum - sum_of_squared_embeddings)
+        
+        return bi_interaction
+    
+    def forward(self, interaction):
+        """
+        Forward pass
+        
+        Args:
+            interaction: Interaction object with user/item/context features
+            
+        Returns:
+            output: [batch_size] logits
+        """
+        # Get embeddings: [batch_size, num_fields, embed_dim]
+        nfm_all_embeddings = self.concat_embed_input_fields(interaction)
+        batch_size = nfm_all_embeddings.shape[0]
+        
+        # === 1. Linear Part (First Order) ===
+        first_order = self.first_order_linear.weight.squeeze(1)  # [num_fields]
+        linear_output = torch.sum(
+            nfm_all_embeddings * first_order.unsqueeze(0).unsqueeze(-1),
+            dim=(1, 2)
+        )  # [batch_size]
+        
+        # === 2. Bi-Interaction Pooling (Second Order) ===
+        bi_output = self.bi_interaction_pooling(nfm_all_embeddings)  # [batch_size, embed_dim]
+        
+        # === 3. Deep Neural Network ===
+        dnn_output = bi_output
+        for layer in self.dnn_layers:
+            dnn_output = layer(dnn_output)
+        # dnn_output: [batch_size, mlp_hidden_size[-1]]
+        
+        # === 4. Final Prediction ===
+        dnn_prediction = self.prediction_layer(dnn_output).squeeze(1)  # [batch_size]
+        
+        # Combine linear + DNN + bias
+        output = linear_output + dnn_prediction + self.bias.squeeze()
+        
+        return output  # [batch_size]
+    
+    def calculate_loss(self, interaction):
+        """Calculate BCE loss"""
+        label = interaction[self.LABEL]
+        output = self.forward(interaction)
+        return self.loss(output, label)
+    
+    def predict(self, interaction):
+        """Predict probability for given interaction"""
+        output = self.forward(interaction)
+        return self.sigmoid(output)
+    
+    @torch.no_grad()
+    def full_sort_predict(self, interaction):
+        """
+        Predict scores for all items for given users
+        
+        Args:
+            interaction: Interaction with user features
+            
+        Returns:
+            scores: [batch_size, n_items] or [n_items] if batch_size=1
+        """
+        device = interaction[self.USER_ID].device
+        batch_size = interaction[self.USER_ID].size(0)
+        n_items = self.n_items
+        
+        # Join user features FIRST
+        interaction = self.dataset.join(interaction)
+        
+        # Update batch_size after join
+        batch_size = interaction[self.USER_ID].size(0)
+        
+        # Expand for all items
+        item_ids = torch.arange(n_items, device=device).unsqueeze(0).repeat(batch_size, 1)
+        item_ids_flat = item_ids.reshape(-1)
+        
+        # Create full interaction matrix
+        new_inter_dict = {}
+        for key in interaction.interaction:
+            if key == self.ITEM_ID:
+                continue
+            v = interaction[key]
+            reps = [n_items] + [1] * (v.dim() - 1)
+            new_inter_dict[key] = v.repeat(*reps).reshape(batch_size * n_items, *v.shape[1:])
+        
+        # Add item IDs
+        if self.ITEM_ID in interaction.interaction:
+            dtype = interaction[self.ITEM_ID].dtype
+        else:
+            dtype = torch.long
+        new_inter_dict[self.ITEM_ID] = item_ids_flat.to(dtype=dtype)
+        
+        full_inter = Interaction(new_inter_dict).to(device)
+        
+        # Join item features
+        full_inter = self.dataset.join(full_inter)
+        
+        # Forward pass
+        logits_flat = self.forward(full_inter)
+        scores_flat = self.sigmoid(logits_flat)
+        
+        # Reshape to [batch_size, n_items]
+        scores = scores_flat.view(batch_size, n_items)
+        
+        if batch_size == 1:
+            scores = scores.squeeze(0)
+        
+        return scores
+    
 class ComputeSimilarity:
     def __init__(self, dataMatrix, topk=100, shrink=0, method="item", normalize=True):
         r"""Computes the cosine similarity of dataMatrix

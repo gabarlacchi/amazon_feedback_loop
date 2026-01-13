@@ -1,6 +1,6 @@
 {
     "dataset": "amazon_e_commerce",
-    "recbole_folder": "models_tmp_2",
+    "recbole_folder": "models_tmp_1",
     "frequent_costumers": true,
     "random_sample_users": false,
     "time_window": "2018-2022",
@@ -8,10 +8,15 @@
     "n_reps": 1,
     "use_cache": true,
     "recommender_model": {
-        "model_name": "EASE",
+        "model_name": "MultiVAE",
         "epochs": 25,
-        "learning_rate": 0.02,
-        "reg_weight": 250.0
+        "learning_rate": 0.01,
+        "dropout_prob": 0.16,
+        "latent_dimension": 256,
+        "mlp_hidden_size": [
+            300,
+            200
+        ]
     },
     "user_strategy": {
         "model_name": "Custom choice model",

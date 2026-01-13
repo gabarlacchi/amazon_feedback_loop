@@ -34,7 +34,7 @@ from recbole.utils import get_model, get_trainer
 
 from utils import DotDict, get_consistent_users, _setup_repro, get_consistent_users_optimized
 # from custom_models import UserKNN, IndividualRandom, IndividualPopularity, LightGCN, BPR, SpectralCF, NeuMF, NNCF
-from custom_models import NeuMF, BPR, UserKNN, ItemKNN, FM
+from custom_models import NeuMF, BPR, UserKNN, ItemKNN, FM, SpectralCF, DeepFM, EASE, NFM
 from amazon_books_dataset import AmazonBooksDataset
 from choice_model import ChoiceModel
 
@@ -204,37 +204,44 @@ class AmazonBooksFeedbackLoop():
         return mapping.get(primary, primary)
     
     @staticmethod
-    def _normalize_token_seq(s: str, max_len: int = 8) -> str:
-        """
-        For token_seq fields in RecBole: return a space-separated token sequence.
-        RecBole commonly treats whitespace-separated tokens as token_seq.
-        """
-        if not s:
-            return ""
+    def _normalize_token_seq(s: str, max_len: int = 4) -> str:
+        if not s or pd.isna(s):
+            return "|".join(["PAD"] * max_len)
+        
         s = str(s).strip().lower()
-
-        # unify separators to spaces
-        s = s.replace("|", " ")
+        
+        # Replace common separators with spaces to split categories
+        # s = s.replace("|", " ")
+        s = s.replace("_", " ")
         s = s.replace(",", " ")
-        s = s.replace("/", " ")
         s = s.replace(";", " ")
-        s = s.replace("&", " and ")
-
-        # remove punctuation-ish noise but keep spaces
+        s = s.replace("/", " ")
+        s = s.replace("&", "")
+        
+        # Remove punctuation
         s = _PUNCT_RE.sub(" ", s)
+        
+        # Normalize whitespace and split into individual words
         s = _WS_RE.sub(" ", s).strip()
-
+        
         if not s:
-            return ""
+            return "|".join(["PAD"] * max_len)
+        
+        # Split into individual tokens (words)
+        tokens = s.split()
+        
+        # Truncate to max_len
+        tokens = tokens[:max_len]
+        
+        # Pad with "PAD" if needed
+        while len(tokens) < max_len:
+            tokens.append("PAD")
 
-        toks = s.split(" ")
-        # optional: drop very short tokens
-        # toks = [t for t in toks if len(t) >= 2]
-
-        if max_len is not None:
-            toks = toks[:max_len]
-
-        return " ".join(toks)
+        # CATEGORY_SEQ SEEMS TO NOT WORKING VERY WELL. JUST ONE CATEGORY (THE FIRST ONE)
+        # REMOVE [-1]
+        
+        # Return underscore-separated tokens
+        return "|".join(tokens)[0]
     
     def set_repetition_seed(self, p: float, rep_idx: int):
         """
@@ -432,12 +439,24 @@ class AmazonBooksFeedbackLoop():
             "BPR",
             "UserKNN",
             "ItemKNN",
+            "SpectralCF",
+            "FM",
+            "DeepFM",
+            "EASE",
+            "NFM",
+            "FM"
         }
         custom_model_map = {
             "NeuMF": NeuMF,
             "BPR": BPR,
             "UserKNN": UserKNN,
             "ItemKNN": ItemKNN,
+            "SpectralCF": SpectralCF,
+            "FM": FM,
+            "DeepFM": DeepFM,
+            "EASE": EASE,
+            "NFM": NFM,
+            "FM": FM
         }
 
         if is_first_init or not hasattr(self, 'model_config'):
@@ -457,7 +476,8 @@ class AmazonBooksFeedbackLoop():
                 "DeepFM": "DeepFM", 
                 "xDeepFM": "xDeepFM",
                 "DCNV2": "DCNV2",
-                "FM": "FM"
+                "FM": "FM",
+                "NFM": "NFM"
             }
 
             try:
@@ -468,19 +488,19 @@ class AmazonBooksFeedbackLoop():
                 traceback.print_exc()
                 raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
 
-            CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM"}
+            CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "NFM"}
             needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
             # !!
             needs_features = True
 
             base_inter_cols = ["user_id", "item_id", "timestamp", "label"]
 
-            if needs_features:
-                base_inter_cols.append("interaction_count")
+            # if needs_features:
+            #     base_inter_cols.append("interaction_count")
             
             if needs_features:
                 user_cols = ["user_id"]
-                item_cols = ["item_id", "price", "category_seq", "desc_text", "publisher", "language"]
+                item_cols = ["item_id", "price", "category_seq", "publisher", "language"]
 
             else:
                 user_cols = None
@@ -602,7 +622,11 @@ class AmazonBooksFeedbackLoop():
                     ("expert_num", "expert_num"),
                     ("low_rank", "low_rank")
                 ],
-                "FM": [("embedding_size", "embedding_size")]
+                "FM": [("embedding_size", "embedding_size")],
+                "NFM": [
+                    ("dropout_prob", "dropout_prob"),
+                    ("mlp_hidden_size", "mlp_hidden_size")
+                ]
             }
 
             for attr, key in MODEL_PARAMS[self.model_name_recbole]:
@@ -795,7 +819,7 @@ class AmazonBooksFeedbackLoop():
             item_feats = item_feats.rename(columns={
                 "item_id": "item_id:token",
                 "price": "price:float",
-                "category_seq": "category_seq:token_seq",
+                "category_seq": "category_seq:token",
                 "publisher": "publisher:token",
                 "language": "language:token",
             })
@@ -867,15 +891,14 @@ class AmazonBooksFeedbackLoop():
 
             cols = [
                 "user_id:token", "item_id:token", "timestamp:float",
-                "label:float", "interaction_count:float", "date"
+                "label:float", "date"
             ]
 
             grouped = grouped.rename(columns={
                 "user_id": "user_id:token",
                 "item_id": "item_id:token",
                 "timestamp": "timestamp:float",
-                "label": "label:float",
-                "interaction_count": "interaction_count:float",
+                "label": "label:float"
             })
 
             # Masks
@@ -885,14 +908,13 @@ class AmazonBooksFeedbackLoop():
 
             cols = [
                 "user_id:token", "item_id:token", "timestamp:float",
-                "label:float", "interaction_count:float", "date"
+                "label:float", "date"
             ]
             grouped = grouped.rename(columns={
                 "user_id": "user_id:token",
                 "item_id": "item_id:token",
                 "timestamp": "timestamp:float",
-                "label": "label:float",
-                "interaction_count": "interaction_count:float",
+                "label": "label:float"
             })
 
             # Split frames
@@ -993,9 +1015,9 @@ class AmazonBooksFeedbackLoop():
             val_month = months[val_idx]
             test_month = months[test_idx]
 
-            working_df["interaction_count:float"] = working_df.groupby(
-                ["user_id:token", "item_id:token", "timestamp:float"]
-            )["month"].transform("count").astype(float)
+            # working_df["interaction_count:float"] = working_df.groupby(
+            #     ["user_id:token", "item_id:token", "timestamp:float"]
+            # )["month"].transform("count").astype(float)
 
             working_df = working_df.drop_duplicates(
                 subset=["user_id:token", "item_id:token", "timestamp:float"]
@@ -1008,7 +1030,7 @@ class AmazonBooksFeedbackLoop():
             test_mask = working_df["month"] == test_month
 
             # Select columns needed for RecBole
-            cols = ["user_id:token", "item_id:token", "timestamp:float", "label:float", "interaction_count:float"]
+            cols = ["user_id:token", "item_id:token", "timestamp:float", "label:float"]
 
             # Create splits
             train_data = working_df[train_mask][cols].copy()
@@ -1261,7 +1283,6 @@ class AmazonBooksFeedbackLoop():
             return selected
         except Exception as e:
             traceback.print_exc()
-
 
     def run_feedback_loop(self, p: float|str, results_path: str, results_scores_path: str, k_horizon: int):
         if self.config.delta_training_epoch > self.config.epochs:

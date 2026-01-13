@@ -34,7 +34,7 @@ from recbole.utils import get_model, get_trainer
 
 from utils import DotDict, get_consistent_users, _setup_repro
 # from custom_models import UserKNN, IndividualRandom, IndividualPopularity, LightGCN, BPR, SpectralCF, NeuMF, NNCF
-from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, EASE
+from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, EASE, NFM, DCNV2
 from amazonecommerce_dataset import AmazonECommerceDataset
 from choice_model import ChoiceModel
 
@@ -322,7 +322,9 @@ class AmazonECommerceFeedbackLoop():
             "SpectralCF",
             "FM",
             "DeepFM",
-            "EASE"
+            "EASE",
+            "NFM",
+            "DCNV2"
         }
         custom_model_map = {
             "NeuMF": NeuMF,
@@ -332,7 +334,9 @@ class AmazonECommerceFeedbackLoop():
             "SpectralCF": SpectralCF,
             "FM": FM,
             "DeepFM": DeepFM,
-            "EASE": EASE
+            "EASE": EASE,
+            "NFM": NFM,
+            "DCNV2": DCNV2
         }
 
         if is_first_init or not hasattr(self, 'model_config'):
@@ -352,7 +356,9 @@ class AmazonECommerceFeedbackLoop():
                 "DeepFM": "DeepFM", 
                 "xDeepFM": "xDeepFM",
                 "DCNV2": "DCNV2",
-                "FM": "FM"
+                "FM": "FM",
+                "NFM": "NFM",
+                "DCNV2": "DCNV2"
             }
 
             try:
@@ -363,7 +369,7 @@ class AmazonECommerceFeedbackLoop():
                 traceback.print_exc()
                 raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
 
-            CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM"}
+            CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "NFM"}
             needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
             needs_features = True
 
@@ -499,7 +505,11 @@ class AmazonECommerceFeedbackLoop():
                     ("expert_num", "expert_num"),
                     ("low_rank", "low_rank")
                 ],
-                "FM": [("embedding_size", "embedding_size")]
+                "FM": [("embedding_size", "embedding_size")],
+                "NFM": [
+                    ("dropout_prob", "dropout_prob"),
+                    ("mlp_hidden_size", "mlp_hidden_size")
+                ]
             }
 
             for attr, key in MODEL_PARAMS[self.model_name_recbole]:
@@ -1349,7 +1359,6 @@ class AmazonECommerceFeedbackLoop():
             
             self._cached_historical_df = all_expanded[cols].copy()
 
-        
     def _build_window_for_epoch_old(self, k: int = 0, new_interactions = None):
         # FIRST INITIALIZATION OF THE DATASET
         if k == 0:
@@ -1887,6 +1896,24 @@ class AmazonECommerceFeedbackLoop():
             try:
                 SCORES_PATH = "./"
                 item_scores = self.recbole_model.full_sort_predict(interaction_batch).cpu()
+
+                # print(f"=== Score Statistics for User {user_id_recbole} ===")
+                # print(f"Min score: {item_scores.min().item():.4f}")
+                # print(f"Max score: {item_scores.max().item():.4f}")
+                # print(f"Mean score: {item_scores.mean().item():.4f}")
+                # print(f"Std score: {item_scores.std().item():.4f}")
+                # print(f"Median score: {item_scores.median().item():.4f}")
+
+                # # Check for NaN/Inf
+                # print(f"NaN values: {torch.isnan(item_scores).sum().item()}")
+                # print(f"Inf values: {torch.isinf(item_scores).sum().item()}")
+
+                # # Score distribution
+                # print(f"Scores > 0.5: {(item_scores > 0.5).sum().item()} items")
+                # print(f"Scores > 0.7: {(item_scores > 0.7).sum().item()} items")
+                # print(f"Scores < 0.3: {(item_scores < 0.3).sum().item()} items")
+
+                # exit()
 
             except Exception as e:
                 traceback.print_exc()
