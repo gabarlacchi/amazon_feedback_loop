@@ -238,10 +238,10 @@ class AmazonBooksFeedbackLoop():
             tokens.append("PAD")
 
         # CATEGORY_SEQ SEEMS TO NOT WORKING VERY WELL. JUST ONE CATEGORY (THE FIRST ONE)
-        # REMOVE [-1]
-        
+        t = "|".join(tokens)
+
         # Return underscore-separated tokens
-        return "|".join(tokens)[0]
+        return t.split("|")[0]
     
     def set_repetition_seed(self, p: float, rep_idx: int):
         """
