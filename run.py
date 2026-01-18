@@ -396,10 +396,10 @@ def main(args: argparse):
                 f"-p=probability-Kitems=KITEMS_coldStart={config.cold_start_months}"
             )
 
-            ps = [1, 0.8, 0.5, 0.2, 0.0]
-            ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
-            # ps = [0.0, 0.2, 0.5, 0.8, 1.0]
-            # ps_names = [f"{usrstrategy_model_name}", "P=0.2", "P=0.5", "P=0.8", f"{model_name}"]
+            # ps = [1, 0.8, 0.5, 0.2, 0.0]
+            # ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
+            ps = [0.0, 0.2, 0.5, 0.8, 1.0]
+            ps_names = [f"{usrstrategy_model_name}", "P=0.2", "P=0.5", "P=0.8", f"{model_name}"]
             k_av_items = config.k_items
 
             n_reps = getattr(config, "n_reps", 3)

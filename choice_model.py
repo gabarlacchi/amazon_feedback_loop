@@ -49,7 +49,7 @@ class ChoiceModel():
         self.tau_users_cache_path = f"exploration_score_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS.csv"
         self.candidate_set_users_path = f"candidate_set_items_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS_size={candidate_size}.csv"
         self.utilities_users_path = f"utilities_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS.csv"
-
+        
     def compute_gini(self, array):
         array = np.array(array)
         if np.amin(array) < 0:

@@ -1181,8 +1181,15 @@ class LastFMFeedbackLoop():
         probs = probs / probs.sum()
         sampled_index = int(self.rng.choice(len(items), p=probs))
         selected_item_id = items[sampled_index]
+        try:
+            item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, selected_item_id)
+        except:
+            cs = self.user_choice_model.candidate_sets[user_id]
+            print(cs)
+            print(type(cs))
+            print(cs[cs == str(selected_item_id)])
+            raise
 
-        item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, str(selected_item_id))
         return item_id_recbole
     
     def run_feedback_loop(self, p: float|str, results_path: str, results_scores_path: str, k_horizon: int):
