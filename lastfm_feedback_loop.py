@@ -218,13 +218,21 @@ class LastFMFeedbackLoop():
     
     def init_choice_model(self) -> None:
         df_init = self.dataset_unrolled_cold_start.copy()
+        # print(df_init[df_init.item_id == "172ca31d-5966-46ef-838e-75891849576f"])
 
+        # exit()
         self.user_choice_model = ChoiceModel(interaction_df=df_init, config=self.config)
         self.user_choice_model.setup()
 
     def init_experiment(self) -> None:
         # Set up unrolled dataset original with columns based on the item id chosen
         df_dataset_total = self.initialization_dataset.unrolled_dataset_total
+        df_dataset_total['date'] = (
+            pd.to_datetime(df_dataset_total['date'], utc=True)
+            .dt.date
+        )
+        df_dataset_total['date'] = pd.to_datetime(df_dataset_total['date'], format="%Y-%m-%d")
+        df_dataset_total['timestamp'] = df_dataset_total.date.values.astype(np.int64) // 10 ** 9
         
         # Get the first available date 
         self.cold_start_start_date = df_dataset_total['date'].min().date()
@@ -1222,6 +1230,11 @@ class LastFMFeedbackLoop():
                     if len(valid_items) == 0:
                         continue
                     basket_size = len(valid_items)
+
+                    # !!
+                    # if basket_size > 15:
+                    #     basket_size = 15
+
                     user_id_recbole = self.recbole_dataset.token2id(self.recbole_dataset.uid_field, user)
 
                     use_recommender_mask = (self.rng.random(basket_size) < p)

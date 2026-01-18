@@ -124,7 +124,7 @@ class LastFMDataset:
             else:
                 print("No feature columns found - skipping NaN removal")
             
-            grouped = self.unrolled_dataset_total.groupby(['user_id', 'item_id', 'timestamp']).size().reset_index(name='count')
+            grouped = self.unrolled_dataset_total.groupby(['user_id', 'item_id', 'timestamp', 'date']).size().reset_index(name='count')
 
             print(f"\nTotal unique (user, item, timestamp) combinations: {len(grouped):,}")
             duplicates_count = (grouped['count'] > 1).sum()
