@@ -12,10 +12,19 @@ from amazon_books_dataset import AmazonBooksDataset
 from amazon_books_feedback_loop import AmazonBooksFeedbackLoop
 
 from amazon_sport_outdoor_dataset import AmazonSportAndOutdoorDataset
+from amazon_sport_outdoor_feedback_loop import AmazonSportAndOutdoorFeedbackLoop
+
+from amazon_grocery_dataset import AmazonGroceryDataset
+from amazon_grocery_feedback_loop import AmazonGroceryFeedbackLoop
+
+from lastfm_dataset import LastFMDataset
+from lastfm_feedback_loop import LastFMFeedbackLoop
 
 RESULTS_PATH_AMAZON = "./results_amazon_category"
 RESULTS_PATH_AMAZON_BOOKS = "./results_amazon_books"
 RESULTS_PATH_AMAZON_SPORT_OUTDOOR = "./results_amazon_sport_outdoor"
+RESULTS_PATH_AMAZON_GROCERY = "./results_amazon_grocery"
+RESULTS_PATH_LASTFM = "./results_lastfm"
 
 
 def main(args: argparse):
@@ -255,6 +264,210 @@ def main(args: argparse):
 
                     init_dataset = AmazonSportAndOutdoorDataset(config=config)
                     init_dataset.setup()
+
+                    feedback_loop_tool = AmazonSportAndOutdoorFeedbackLoop(config=config_run, initialization_dataset=init_dataset)
+
+                    # Set up the system, save usefull data and pre-compute  interactions distributions
+                    feedback_loop_tool.init_experiment()
+
+                    # Define training-validation-test set for the recom. models
+                    # _ = feedback_loop_tool.init_recbole_dataset()
+                    feedback_loop_tool._build_window_for_epoch(k=0, new_interactions=None)
+
+                    # Traing and set up RecBole system
+                    feedback_loop_tool.init_recbole_model(is_first_init=True, warm_start=True, results_path=os.path.join(rep_dir, "dataframe"))
+
+                    # Tune parameters of the selected model
+                    # NOTE that it does not set up the found parameters. They are to be defined in the json config
+                    # A file will be output with the results
+                    _ = feedback_loop_tool.tuning_hyperparameters()
+
+                    if usrstrategy_model_name == "Custom choice model":
+                        feedback_loop_tool.init_choice_model()
+                        feedback_loop_tool.user_choice_model.results_path = choice_dir
+                    else:
+                        raise Exception("\n Choice model not implemented yet or not recognized \n")
+
+                    model_metrics = feedback_loop_tool.run_feedback_loop(
+                        p=p, 
+                        results_path=os.path.join(rep_dir, "dataframe"),
+                        results_scores_path=os.path.join(rep_dir, "recom_scores"),
+                        k_horizon=k_av_items
+                    )
+
+    elif config.dataset == "amazon_grocery":
+        if not os.path.exists(RESULTS_PATH_AMAZON_GROCERY):
+            os.makedirs(RESULTS_PATH_AMAZON_GROCERY)
+        model_name = config.recommender_model.model_name
+        usrstrategy_model_name = config.user_strategy.model_name
+
+        if config.experiment_mode == "p-validation":
+            results_path = os.path.join(RESULTS_PATH_AMAZON_GROCERY, "p-validation", "amazon")
+            fld_name = (
+                f"recom={model_name}-usrstrategy={usrstrategy_model_name}"
+                f"_tau={config.user_strategy.tau}"
+                f"_candidate_set_size={config.user_strategy.candidate_set.size}"
+                f"-p=probability-Kitems=KITEMS_coldStart={config.cold_start_months}"
+            )
+
+            ps = [1, 0.8, 0.5, 0.2, 0.0]
+            ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
+
+            k_av_items = config.k_items
+
+            n_reps = getattr(config, "n_reps", 3)
+            base_seed = int(getattr(config, "seed", 2025))
+
+            for p, p_name in zip(ps, ps_names):
+                to_create = fld_name.replace("probability", str(p)).replace("KITEMS", str(k_av_items))
+                p_root = os.path.join(results_path, to_create)
+                os.makedirs(p_root, exist_ok=True)
+
+                with open(os.path.join(p_root, "config_template.json"), 'w') as f:
+                    json.dump(config, f, indent=4, default=lambda o: o.__dict__ if hasattr(o, "__dict__") else o)
+
+                for rep in range(n_reps):
+                    rep_seed = make_rep_seed(base_seed=base_seed, p=float(p), rep_idx=rep)
+                    config_run = deepcopy(config)
+                    config_run.seed = rep_seed
+
+                    rep_dir = os.path.join(p_root, f"rep={rep:03d}")
+                    os.makedirs(rep_dir, exist_ok=True)
+
+                    df_dir = os.path.join(rep_dir, "dataframe")
+                    scores_dir  = os.path.join(rep_dir, "recom_scores")
+                    choice_dir  = os.path.join(rep_dir, "choice_model")
+                    os.makedirs(df_dir, exist_ok=True)
+                    os.makedirs(scores_dir, exist_ok=True)
+                    os.makedirs(choice_dir, exist_ok=True)
+
+                    with open(os.path.join(rep_dir, "config.json"), 'w') as f:
+                        json.dump(config_run, f, indent=4, default=lambda o: o.__dict__ if hasattr(o, "__dict__") else o)
+
+                    init_dataset = AmazonGroceryDataset(config=config)
+                    init_dataset.setup()
+
+                    feedback_loop_tool = AmazonGroceryFeedbackLoop(config=config_run, initialization_dataset=init_dataset)
+
+                    # Set up the system, save usefull data and pre-compute  interactions distributions
+                    feedback_loop_tool.init_experiment()
+
+                    # Define training-validation-test set for the recom. models
+                    # _ = feedback_loop_tool.init_recbole_dataset()
+                    feedback_loop_tool._build_window_for_epoch(k=0, new_interactions=None)
+
+                    # Traing and set up RecBole system
+                    feedback_loop_tool.init_recbole_model(is_first_init=True, warm_start=True, results_path=os.path.join(rep_dir, "dataframe"))
+
+                    # Tune parameters of the selected model
+                    # NOTE that it does not set up the found parameters. They are to be defined in the json config
+                    # A file will be output with the results
+                    _ = feedback_loop_tool.tuning_hyperparameters()
+
+                    if usrstrategy_model_name == "Custom choice model":
+                        feedback_loop_tool.init_choice_model()
+                        feedback_loop_tool.user_choice_model.results_path = choice_dir
+                    else:
+                        raise Exception("\n Choice model not implemented yet or not recognized \n")
+
+                    model_metrics = feedback_loop_tool.run_feedback_loop(
+                        p=p, 
+                        results_path=os.path.join(rep_dir, "dataframe"),
+                        results_scores_path=os.path.join(rep_dir, "recom_scores"),
+                        k_horizon=k_av_items
+                    )
+
+    elif config.dataset == "lastfm":
+        if not os.path.exists(RESULTS_PATH_LASTFM):
+            os.makedirs(RESULTS_PATH_LASTFM)
+
+        # init_dataset = AmazonECommerceDataset(config=config)
+        # init_dataset.setup()
+
+        model_name = config.recommender_model.model_name
+        usrstrategy_model_name = config.user_strategy.model_name # Suppose to be a variant of our custom choice model
+        
+        if config.experiment_mode == "p-validation":
+            results_path = os.path.join(RESULTS_PATH_LASTFM, "p-validation", "amazon")
+            fld_name = (
+                f"recom={model_name}-usrstrategy={usrstrategy_model_name}"
+                f"_tau={config.user_strategy.tau}"
+                f"_candidate_set_size={config.user_strategy.candidate_set.size}"
+                f"-p=probability-Kitems=KITEMS_coldStart={config.cold_start_months}"
+            )
+
+            ps = [1, 0.8, 0.5, 0.2, 0.0]
+            ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
+            # ps = [0.0, 0.2, 0.5, 0.8, 1.0]
+            # ps_names = [f"{usrstrategy_model_name}", "P=0.2", "P=0.5", "P=0.8", f"{model_name}"]
+            k_av_items = config.k_items
+
+            n_reps = getattr(config, "n_reps", 3)
+            base_seed = int(getattr(config, "seed", 2025))
+
+            for p, p_name in zip(ps, ps_names):
+                to_create = fld_name.replace("probability", str(p)).replace("KITEMS", str(k_av_items))
+                p_root = os.path.join(results_path, to_create)
+                os.makedirs(p_root, exist_ok=True)
+
+                with open(os.path.join(p_root, "config_template.json"), 'w') as f:
+                    json.dump(config, f, indent=4, default=lambda o: o.__dict__ if hasattr(o, "__dict__") else o)
+
+                for rep in range(n_reps):
+                    rep_seed = make_rep_seed(base_seed=base_seed, p=float(p), rep_idx=rep)
+                    config_run = deepcopy(config)
+                    config_run.seed = rep_seed
+
+                    rep_dir = os.path.join(p_root, f"rep={rep:03d}")
+                    os.makedirs(rep_dir, exist_ok=True)
+
+                    df_dir = os.path.join(rep_dir, "dataframe")
+                    scores_dir  = os.path.join(rep_dir, "recom_scores")
+                    choice_dir  = os.path.join(rep_dir, "choice_model")
+                    os.makedirs(df_dir, exist_ok=True)
+                    os.makedirs(scores_dir, exist_ok=True)
+                    os.makedirs(choice_dir, exist_ok=True)
+
+                    with open(os.path.join(rep_dir, "config.json"), 'w') as f:
+                        json.dump(config_run, f, indent=4, default=lambda o: o.__dict__ if hasattr(o, "__dict__") else o)
+
+                    # Load and process the dataset from the original file
+                    # Produce also implicit feedback dataset format
+                    init_dataset = LastFMDataset(config=config_run)
+                    init_dataset.setup()
+
+                    feedback_loop_tool = LastFMFeedbackLoop(config=config_run, initialization_dataset=init_dataset)
+
+                    # Set up the system, save usefull data and pre-compute  interactions distributions
+                    feedback_loop_tool.init_experiment()
+
+                    # Define training-validation-test set for the recom. models
+                    # _ = feedback_loop_tool.init_recbole_dataset()
+                    feedback_loop_tool._build_window_for_epoch(k=0, new_interactions=None)
+
+                    # Traing and set up RecBole system
+                    feedback_loop_tool.init_recbole_model(is_first_init=True, warm_start=True, results_path=os.path.join(rep_dir, "dataframe"))
+
+                    # Tune parameters of the selected model
+                    # NOTE that it does not set up the found parameters. They are to be defined in the json config
+                    # A file will be output with the results
+                    _ = feedback_loop_tool.tuning_hyperparameters()
+
+                    if usrstrategy_model_name == "Custom choice model":
+                        feedback_loop_tool.init_choice_model()
+                        feedback_loop_tool.user_choice_model.results_path = choice_dir
+                    else:
+                        raise Exception("\n Choice model not implemented yet or not recognized \n")
+                    
+                    model_metrics = feedback_loop_tool.run_feedback_loop(
+                        p=p, 
+                        results_path=os.path.join(rep_dir, "dataframe"),
+                        results_scores_path=os.path.join(rep_dir, "recom_scores"),
+                        k_horizon=k_av_items
+                    )
+
+                    
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="")

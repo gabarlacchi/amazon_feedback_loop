@@ -1,0 +1,6 @@
+model: MultiVAE
+
+learning_rate loguniform -8,-1
+latent_dimension choice [64,128,200,256]
+mlp_hidden_size choice ['[300]','[600]','[300,200]','[600,400]']
+dropout_prob uniform 0.1,0.7

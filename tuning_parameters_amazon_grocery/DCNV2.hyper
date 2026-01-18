@@ -1,0 +1,9 @@
+model: DCNV2
+
+learning_rate choice [0.01, 0.008, 0.005, 0.001]
+embedding_size choice [8, 16, 32]
+mlp_hidden_size choice ['[256,256]', '[512,512]', '[768,768]']
+dropout_prob choice [0.0, 0.1, 0.2, 0.3, 0.5]
+reg_weight choice [0.0, 1e-5, 1e-4, 5e-4, 1e-3, 1e-2]
+structure choice ['stacked', 'parallel']
+cross_layer_num choice [2, 3, 4, 5]

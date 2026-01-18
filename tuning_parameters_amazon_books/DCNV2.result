@@ -1,0 +1,102 @@
+cross_layer_num:3, dropout_prob:0.5, embedding_size:32, learning_rate:0.008, mlp_hidden_size:[256,256], reg_weight:0.0005, structure:stacked
+Valid result:
+ndcg@10 : 0.0079    recall@10 : 0.0105    precision@10 : 0.0022    hit@10 : 0.0197    itemcoverage@10 : 0.1771    mrr@10 : 0.0101    map@10 : 0.0059
+Test result:
+ndcg@10 : 0.0036    recall@10 : 0.0052    precision@10 : 0.0015    hit@10 : 0.0153    itemcoverage@10 : 0.1799    mrr@10 : 0.0056    map@10 : 0.0019
+
+cross_layer_num:4, dropout_prob:0.3, embedding_size:32, learning_rate:0.008, mlp_hidden_size:[256,256], reg_weight:0.001, structure:parallel
+Valid result:
+ndcg@10 : 0.0114    recall@10 : 0.0141    precision@10 : 0.0024    hit@10 : 0.0236    itemcoverage@10 : 0.2446    mrr@10 : 0.0123    map@10 : 0.0094
+Test result:
+ndcg@10 : 0.0038    recall@10 : 0.0057    precision@10 : 0.0013    hit@10 : 0.0134    itemcoverage@10 : 0.2498    mrr@10 : 0.0057    map@10 : 0.0022
+
+cross_layer_num:2, dropout_prob:0.0, embedding_size:32, learning_rate:0.008, mlp_hidden_size:[256,256], reg_weight:0.001, structure:parallel
+Valid result:
+ndcg@10 : 0.0063    recall@10 : 0.0125    precision@10 : 0.0024    hit@10 : 0.0236    itemcoverage@10 : 0.069    mrr@10 : 0.0064    map@10 : 0.0032
+Test result:
+ndcg@10 : 0.002    recall@10 : 0.0026    precision@10 : 0.001    hit@10 : 0.0095    itemcoverage@10 : 0.0685    mrr@10 : 0.0036    map@10 : 0.001
+
+cross_layer_num:4, dropout_prob:0.1, embedding_size:32, learning_rate:0.005, mlp_hidden_size:[768,768], reg_weight:0.01, structure:parallel
+Valid result:
+ndcg@10 : 0.0077    recall@10 : 0.0133    precision@10 : 0.0024    hit@10 : 0.0236    itemcoverage@10 : 0.3179    mrr@10 : 0.008    map@10 : 0.0049
+Test result:
+ndcg@10 : 0.0023    recall@10 : 0.0042    precision@10 : 0.0017    hit@10 : 0.0172    itemcoverage@10 : 0.3226    mrr@10 : 0.0028    map@10 : 0.0007
+
+cross_layer_num:4, dropout_prob:0.2, embedding_size:16, learning_rate:0.01, mlp_hidden_size:[512,512], reg_weight:0.0005, structure:stacked
+Valid result:
+ndcg@10 : 0.0092    recall@10 : 0.0145    precision@10 : 0.0022    hit@10 : 0.0217    itemcoverage@10 : 0.0269    mrr@10 : 0.0092    map@10 : 0.0068
+Test result:
+ndcg@10 : 0.0026    recall@10 : 0.0028    precision@10 : 0.0011    hit@10 : 0.0095    itemcoverage@10 : 0.0255    mrr@10 : 0.0062    map@10 : 0.0013
+
+cross_layer_num:2, dropout_prob:0.2, embedding_size:32, learning_rate:0.005, mlp_hidden_size:[768,768], reg_weight:0.0, structure:parallel
+Valid result:
+ndcg@10 : 0.0086    recall@10 : 0.0103    precision@10 : 0.0016    hit@10 : 0.0157    itemcoverage@10 : 0.0072    mrr@10 : 0.0101    map@10 : 0.007
+Test result:
+ndcg@10 : 0.0042    recall@10 : 0.006    precision@10 : 0.0013    hit@10 : 0.0115    itemcoverage@10 : 0.0074    mrr@10 : 0.0073    map@10 : 0.0024
+
+cross_layer_num:4, dropout_prob:0.3, embedding_size:8, learning_rate:0.001, mlp_hidden_size:[512,512], reg_weight:0.0005, structure:stacked
+Valid result:
+ndcg@10 : 0.0137    recall@10 : 0.024    precision@10 : 0.0041    hit@10 : 0.0394    itemcoverage@10 : 0.1323    mrr@10 : 0.0141    map@10 : 0.0085
+Test result:
+ndcg@10 : 0.004    recall@10 : 0.0056    precision@10 : 0.0013    hit@10 : 0.0134    itemcoverage@10 : 0.1348    mrr@10 : 0.0063    map@10 : 0.0024
+
+cross_layer_num:4, dropout_prob:0.1, embedding_size:8, learning_rate:0.005, mlp_hidden_size:[512,512], reg_weight:0.001, structure:parallel
+Valid result:
+ndcg@10 : 0.0065    recall@10 : 0.0119    precision@10 : 0.0024    hit@10 : 0.0236    itemcoverage@10 : 0.3286    mrr@10 : 0.0056    map@10 : 0.004
+Test result:
+ndcg@10 : 0.0009    recall@10 : 0.0019    precision@10 : 0.0006    hit@10 : 0.0057    itemcoverage@10 : 0.331    mrr@10 : 0.001    map@10 : 0.0003
+
+cross_layer_num:5, dropout_prob:0.3, embedding_size:32, learning_rate:0.001, mlp_hidden_size:[256,256], reg_weight:0.01, structure:stacked
+Valid result:
+ndcg@10 : 0.0117    recall@10 : 0.0166    precision@10 : 0.0022    hit@10 : 0.0217    itemcoverage@10 : 0.116    mrr@10 : 0.0116    map@10 : 0.0095
+Test result:
+ndcg@10 : 0.0029    recall@10 : 0.0063    precision@10 : 0.0011    hit@10 : 0.0115    itemcoverage@10 : 0.1161    mrr@10 : 0.0029    map@10 : 0.0013
+
+cross_layer_num:5, dropout_prob:0.5, embedding_size:8, learning_rate:0.001, mlp_hidden_size:[512,512], reg_weight:1e-05, structure:stacked
+Valid result:
+ndcg@10 : 0.0068    recall@10 : 0.0113    precision@10 : 0.0018    hit@10 : 0.0177    itemcoverage@10 : 0.0356    mrr@10 : 0.0066    map@10 : 0.0047
+Test result:
+ndcg@10 : 0.0014    recall@10 : 0.0026    precision@10 : 0.0011    hit@10 : 0.0115    itemcoverage@10 : 0.0351    mrr@10 : 0.0016    map@10 : 0.0004
+
+cross_layer_num:4, dropout_prob:0.2, embedding_size:32, learning_rate:0.008, mlp_hidden_size:[512,512], reg_weight:0.0001, structure:stacked
+Valid result:
+ndcg@10 : 0.0079    recall@10 : 0.0144    precision@10 : 0.002    hit@10 : 0.0197    itemcoverage@10 : 0.0368    mrr@10 : 0.0063    map@10 : 0.0054
+Test result:
+ndcg@10 : 0.0014    recall@10 : 0.0031    precision@10 : 0.001    hit@10 : 0.0076    itemcoverage@10 : 0.0381    mrr@10 : 0.0013    map@10 : 0.0005
+
+cross_layer_num:3, dropout_prob:0.3, embedding_size:8, learning_rate:0.005, mlp_hidden_size:[768,768], reg_weight:0.01, structure:parallel
+Valid result:
+ndcg@10 : 0.0076    recall@10 : 0.0132    precision@10 : 0.0022    hit@10 : 0.0217    itemcoverage@10 : 0.1179    mrr@10 : 0.0076    map@10 : 0.005
+Test result:
+ndcg@10 : 0.0021    recall@10 : 0.0047    precision@10 : 0.0008    hit@10 : 0.0076    itemcoverage@10 : 0.1205    mrr@10 : 0.0017    map@10 : 0.001
+
+cross_layer_num:2, dropout_prob:0.1, embedding_size:16, learning_rate:0.008, mlp_hidden_size:[256,256], reg_weight:0.0005, structure:stacked
+Valid result:
+ndcg@10 : 0.0069    recall@10 : 0.0087    precision@10 : 0.0014    hit@10 : 0.0138    itemcoverage@10 : 0.1267    mrr@10 : 0.008    map@10 : 0.0055
+Test result:
+ndcg@10 : 0.002    recall@10 : 0.0044    precision@10 : 0.001    hit@10 : 0.0095    itemcoverage@10 : 0.1288    mrr@10 : 0.0018    map@10 : 0.0008
+
+cross_layer_num:3, dropout_prob:0.0, embedding_size:8, learning_rate:0.005, mlp_hidden_size:[512,512], reg_weight:0.0005, structure:parallel
+Valid result:
+ndcg@10 : 0.0065    recall@10 : 0.0099    precision@10 : 0.0016    hit@10 : 0.0157    itemcoverage@10 : 0.3188    mrr@10 : 0.0082    map@10 : 0.0043
+Test result:
+ndcg@10 : 0.0021    recall@10 : 0.0042    precision@10 : 0.0017    hit@10 : 0.0153    itemcoverage@10 : 0.3265    mrr@10 : 0.0022    map@10 : 0.0006
+
+cross_layer_num:3, dropout_prob:0.1, embedding_size:8, learning_rate:0.001, mlp_hidden_size:[768,768], reg_weight:0.0, structure:parallel
+Valid result:
+ndcg@10 : 0.0076    recall@10 : 0.0118    precision@10 : 0.0026    hit@10 : 0.0236    itemcoverage@10 : 0.2783    mrr@10 : 0.0088    map@10 : 0.0048
+Test result:
+ndcg@10 : 0.0052    recall@10 : 0.0098    precision@10 : 0.0019    hit@10 : 0.0191    itemcoverage@10 : 0.2842    mrr@10 : 0.0059    map@10 : 0.0027
+
+cross_layer_num:4, dropout_prob:0.2, embedding_size:16, learning_rate:0.001, mlp_hidden_size:[768,768], reg_weight:0.01, structure:parallel
+Valid result:
+ndcg@10 : 0.0129    recall@10 : 0.0212    precision@10 : 0.0031    hit@10 : 0.0295    itemcoverage@10 : 0.2704    mrr@10 : 0.0127    map@10 : 0.0091
+Test result:
+ndcg@10 : 0.0028    recall@10 : 0.0056    precision@10 : 0.0011    hit@10 : 0.0115    itemcoverage@10 : 0.2786    mrr@10 : 0.0035    map@10 : 0.0013
+
+cross_layer_num:4, dropout_prob:0.3, embedding_size:32, learning_rate:0.005, mlp_hidden_size:[768,768], reg_weight:0.0, structure:parallel
+Valid result:
+ndcg@10 : 0.0058    recall@10 : 0.0088    precision@10 : 0.0016    hit@10 : 0.0138    itemcoverage@10 : 0.1004    mrr@10 : 0.0071    map@10 : 0.004
+Test result:
+ndcg@10 : 0.0022    recall@10 : 0.0047    precision@10 : 0.0008    hit@10 : 0.0076    itemcoverage@10 : 0.1007    mrr@10 : 0.003    map@10 : 0.001
+

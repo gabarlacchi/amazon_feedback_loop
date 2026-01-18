@@ -1,0 +1,4 @@
+model: BPR
+
+learning_rate loguniform -8,-1 
+reg_weight loguniform -8,-1

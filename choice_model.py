@@ -25,8 +25,6 @@ class ChoiceModel():
         else:
             self.df = self.df[[user_col, item_col, timestamp_col, "timestamp", rating_col]]
 
-        # Amazon books: 0.69% of users have multiple ratings for the same item
-
         self.user_col = user_col
         self.item_col = item_col
         self.time_col = timestamp_col
@@ -36,6 +34,12 @@ class ChoiceModel():
             self.feedback_type = "implicit"
         elif self.config.dataset == "amazon_books":
             self.feedback_type = "explicit"
+        elif self.config.dataset == "amazon_sport_outdoor":
+            self.feedback_type = "explicit"
+        elif self.config.dataset == "amazon_grocery":
+            self.feedback_type = "explicit"
+        elif self.config.dataset == "lastfm":
+            self.feedback_type = "implicit"
 
         self.tau = config.user_strategy.tau
 
@@ -472,7 +476,6 @@ class ChoiceModel():
     
     def update(self, new_interactions, epoch):
         new_df = pd.DataFrame(new_interactions)
-    
         # Ensure date column is datetime BEFORE selecting columns
         new_df[self.time_col] = pd.to_datetime(new_df[self.time_col])
         
@@ -482,8 +485,8 @@ class ChoiceModel():
         else:
             new_df = new_df[["user_id", "item_id", "date", "timestamp"]]
         
-        # ALSO ensure self.df has the right type (defensive coding)
-        self.df[self.time_col] = pd.to_datetime(self.df[self.time_col])
+        # Ensure self.df has the same timezone handling
+        self.df[self.time_col] = pd.to_datetime(self.df[self.time_col], utc=True).dt.tz_localize(None)
         
         # Now concat and sort
         self.df = pd.concat([self.df, new_df], ignore_index=True).sort_values(

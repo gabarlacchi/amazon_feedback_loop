@@ -1,0 +1,90 @@
+dropout_prob:0.433392506916192, embedding_size:8, learning_rate:0.019035465135261307, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0041    recall@10 : 0.003    precision@10 : 0.0031    hit@10 : 0.0272    itemcoverage@10 : 0.0054    mrr@10 : 0.0133    map@10 : 0.0016
+Test result:
+ndcg@10 : 0.006    recall@10 : 0.0063    precision@10 : 0.0035    hit@10 : 0.0347    itemcoverage@10 : 0.005    mrr@10 : 0.0134    map@10 : 0.0027
+
+dropout_prob:0.24409009229204767, embedding_size:8, learning_rate:0.00778520113595115, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0057    recall@10 : 0.0049    precision@10 : 0.0039    hit@10 : 0.034    itemcoverage@10 : 0.0341    mrr@10 : 0.0166    map@10 : 0.0023
+Test result:
+ndcg@10 : 0.0039    recall@10 : 0.0038    precision@10 : 0.0018    hit@10 : 0.0182    itemcoverage@10 : 0.0341    mrr@10 : 0.0083    map@10 : 0.0022
+
+dropout_prob:0.30225544929187287, embedding_size:32, learning_rate:0.0003530840653669843, mlp_hidden_size:[128,128,128]
+Valid result:
+ndcg@10 : 0.006    recall@10 : 0.0059    precision@10 : 0.0046    hit@10 : 0.0374    itemcoverage@10 : 0.0007    mrr@10 : 0.0153    map@10 : 0.0023
+Test result:
+ndcg@10 : 0.0073    recall@10 : 0.0075    precision@10 : 0.0042    hit@10 : 0.0401    itemcoverage@10 : 0.0007    mrr@10 : 0.0164    map@10 : 0.0035
+
+dropout_prob:0.3770961692178585, embedding_size:8, learning_rate:0.03642414599970302, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0034    recall@10 : 0.0048    precision@10 : 0.0027    hit@10 : 0.0255    itemcoverage@10 : 0.0077    mrr@10 : 0.0073    map@10 : 0.0011
+Test result:
+ndcg@10 : 0.0053    recall@10 : 0.006    precision@10 : 0.0027    hit@10 : 0.0274    itemcoverage@10 : 0.0076    mrr@10 : 0.0128    map@10 : 0.0023
+
+dropout_prob:0.42890262046256467, embedding_size:16, learning_rate:0.00034940877252252154, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0062    recall@10 : 0.0068    precision@10 : 0.0048    hit@10 : 0.0408    itemcoverage@10 : 0.0008    mrr@10 : 0.0153    map@10 : 0.0023
+Test result:
+ndcg@10 : 0.0069    recall@10 : 0.0069    precision@10 : 0.004    hit@10 : 0.0383    itemcoverage@10 : 0.0007    mrr@10 : 0.0159    map@10 : 0.0033
+
+dropout_prob:0.2759898944338254, embedding_size:16, learning_rate:0.21528092368221208, mlp_hidden_size:[128,128]
+Valid result:
+ndcg@10 : 0.0011    recall@10 : 0.0024    precision@10 : 0.0005    hit@10 : 0.0051    itemcoverage@10 : 0.0999    mrr@10 : 0.0013    map@10 : 0.0005
+Test result:
+ndcg@10 : 0.0002    recall@10 : 0.0005    precision@10 : 0.0002    hit@10 : 0.0018    itemcoverage@10 : 0.097    mrr@10 : 0.0002    map@10 : 0.0001
+
+dropout_prob:0.3422171469651829, embedding_size:16, learning_rate:0.0006089356768616625, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0058    recall@10 : 0.006    precision@10 : 0.0043    hit@10 : 0.0374    itemcoverage@10 : 0.0007    mrr@10 : 0.0147    map@10 : 0.0022
+Test result:
+ndcg@10 : 0.0066    recall@10 : 0.0063    precision@10 : 0.0036    hit@10 : 0.0365    itemcoverage@10 : 0.0007    mrr@10 : 0.0155    map@10 : 0.0032
+
+dropout_prob:0.30508229610637294, embedding_size:8, learning_rate:0.10044950162697429, mlp_hidden_size:[256,128,64]
+Valid result:
+ndcg@10 : 0.001    recall@10 : 0.001    precision@10 : 0.0005    hit@10 : 0.0051    itemcoverage@10 : 0.0264    mrr@10 : 0.002    map@10 : 0.0004
+Test result:
+ndcg@10 : 0.0005    recall@10 : 0.0006    precision@10 : 0.0005    hit@10 : 0.0055    itemcoverage@10 : 0.0261    mrr@10 : 0.0007    map@10 : 0.0001
+
+dropout_prob:0.4823535403983682, embedding_size:32, learning_rate:0.00038850014064858697, mlp_hidden_size:[128,128,128]
+Valid result:
+ndcg@10 : 0.0056    recall@10 : 0.0053    precision@10 : 0.0043    hit@10 : 0.0357    itemcoverage@10 : 0.0007    mrr@10 : 0.0151    map@10 : 0.0021
+Test result:
+ndcg@10 : 0.0065    recall@10 : 0.0062    precision@10 : 0.0035    hit@10 : 0.0347    itemcoverage@10 : 0.0007    mrr@10 : 0.0155    map@10 : 0.0032
+
+dropout_prob:0.27455756566673256, embedding_size:32, learning_rate:0.0010820485561257337, mlp_hidden_size:[128,128]
+Valid result:
+ndcg@10 : 0.005    recall@10 : 0.0045    precision@10 : 0.0037    hit@10 : 0.0306    itemcoverage@10 : 0.0007    mrr@10 : 0.0139    map@10 : 0.002
+Test result:
+ndcg@10 : 0.0073    recall@10 : 0.0072    precision@10 : 0.004    hit@10 : 0.0383    itemcoverage@10 : 0.0007    mrr@10 : 0.0164    map@10 : 0.0036
+
+dropout_prob:0.16019139771841373, embedding_size:8, learning_rate:0.00041266971677169555, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0056    recall@10 : 0.0052    precision@10 : 0.0041    hit@10 : 0.034    itemcoverage@10 : 0.0007    mrr@10 : 0.0145    map@10 : 0.0022
+Test result:
+ndcg@10 : 0.0066    recall@10 : 0.0062    precision@10 : 0.0036    hit@10 : 0.0347    itemcoverage@10 : 0.0007    mrr@10 : 0.0153    map@10 : 0.0033
+
+dropout_prob:0.4107193033914821, embedding_size:32, learning_rate:0.000367404243722035, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0058    recall@10 : 0.0056    precision@10 : 0.0041    hit@10 : 0.0357    itemcoverage@10 : 0.001    mrr@10 : 0.0156    map@10 : 0.0022
+Test result:
+ndcg@10 : 0.0063    recall@10 : 0.0055    precision@10 : 0.0033    hit@10 : 0.0328    itemcoverage@10 : 0.001    mrr@10 : 0.0154    map@10 : 0.0032
+
+dropout_prob:0.4675294468157223, embedding_size:32, learning_rate:0.23114450179527407, mlp_hidden_size:[64,64]
+Valid result:
+ndcg@10 : 0.0023    recall@10 : 0.0021    precision@10 : 0.0005    hit@10 : 0.0051    itemcoverage@10 : 0.0762    mrr@10 : 0.0036    map@10 : 0.0019
+Test result:
+ndcg@10 : 0.0002    recall@10 : 0.0002    precision@10 : 0.0002    hit@10 : 0.0018    itemcoverage@10 : 0.0701    mrr@10 : 0.0005    map@10 : 0.0
+
+dropout_prob:0.47436936839925403, embedding_size:16, learning_rate:0.003074744943290446, mlp_hidden_size:[128,128]
+Valid result:
+ndcg@10 : 0.0054    recall@10 : 0.0047    precision@10 : 0.0036    hit@10 : 0.0323    itemcoverage@10 : 0.0007    mrr@10 : 0.0156    map@10 : 0.0021
+Test result:
+ndcg@10 : 0.0063    recall@10 : 0.0056    precision@10 : 0.0033    hit@10 : 0.0328    itemcoverage@10 : 0.0007    mrr@10 : 0.0154    map@10 : 0.0032
+
+dropout_prob:0.4999670090747079, embedding_size:8, learning_rate:0.002144702079483062, mlp_hidden_size:[128,128,128]
+Valid result:
+ndcg@10 : 0.0055    recall@10 : 0.0051    precision@10 : 0.0039    hit@10 : 0.0357    itemcoverage@10 : 0.0007    mrr@10 : 0.0154    map@10 : 0.0021
+Test result:
+ndcg@10 : 0.0064    recall@10 : 0.0059    precision@10 : 0.0033    hit@10 : 0.0328    itemcoverage@10 : 0.0007    mrr@10 : 0.0154    map@10 : 0.0032
+

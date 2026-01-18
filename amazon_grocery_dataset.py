@@ -13,13 +13,13 @@ import itertools
 
 from utils import DotDict
 
-class AmazonBooksDataset:
+class AmazonGroceryDataset:
     def __init__(self, config: DotDict, **kwargs):
         self.config = config
 
         self.dataset_root_path = f"./data"
-        self.dataset_filename = "amazon_books.jsonl"
-        self.dataset_features_filename = "meta_amazon_books.jsonl"
+        self.dataset_filename = "Grocery_and_Gourmet_Food.jsonl"
+        self.dataset_features_filename = "meta_Grocery_and_Gourmet_Food.jsonl"
 
         self.item_level = self.config.item_level
 
@@ -36,13 +36,13 @@ class AmazonBooksDataset:
         except Exception as e:
             print(traceback.format_exc())
 
-        self.distribution_timeline_path = f"./cache/distribution_timeline_amazon_books.csv"
-        self.unrolled_dataset_total_path = f"./cache/unrolled_total_{self.y1}-{self.y2}_amazon_books.csv"
-        self.users_rating_distribution_path = f"./cache/users_rating_distribution_{self.y1}-{self.y2}_amazon_books.csv"
-        self.global_fallback_rating_distribution_path = f"./cache/global_fallback_rating_distribution_{self.y1}-{self.y2}_amazon_books.csv"
-        self.cache_mapping_strings_int_path_users = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_users_amazon_books.csv"
-        self.cache_mapping_strings_int_path_items = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_items_amazon_books.csv"
-        self.dump_dataset = f"./cache/real_dataset_sim_amazon_books"
+        self.distribution_timeline_path = f"./cache/distribution_timeline_amazon_grocery.csv"
+        self.unrolled_dataset_total_path = f"./cache/unrolled_total_{self.y1}-{self.y2}_amazon_grocery.csv"
+        self.users_rating_distribution_path = f"./cache/users_rating_distribution_{self.y1}-{self.y2}_amazon_grocery.csv"
+        self.global_fallback_rating_distribution_path = f"./cache/global_fallback_rating_distribution_{self.y1}-{self.y2}_amazon_grocery.csv"
+        self.cache_mapping_strings_int_path_users = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_users_amazon_grocery.csv"
+        self.cache_mapping_strings_int_path_items = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_items_amazon_grocery.csv"
+        self.dump_dataset = f"./cache/real_dataset_sim_amazon_grocery"
         os.makedirs(self.dump_dataset, exist_ok=True)
 
     def setup(self)-> None:
@@ -102,7 +102,7 @@ class AmazonBooksDataset:
                 "categories",
                 "price",
                 "description",
-                "details"
+                "average_rating"
             ]
             keep = [c for c in to_keep if c in df_features.columns]
             meta = df_features[keep].copy()
@@ -138,73 +138,63 @@ class AmazonBooksDataset:
 
             meta = meta.drop(columns=["description"])
 
-            # DETAILS
-            # It contains publisher and language of the book
-            if "details" in meta.columns:
-                extracted = meta["details"].apply(self.extract_details_info)
-
-                meta["publisher"] = extracted.apply(lambda x: x[0])
-                meta["language"] = extracted.apply(lambda x: x[1])
-
-                meta = meta.drop(columns=["details"])
-
-            meta = meta.drop_duplicates(subset=["parent_asin"])
+            # AVERAGE RATINGS   
+            if "average_rating" in meta.columns:
+                meta["avg_rating"] = meta["average_rating"]
+            else:
+                meta["avg_rating"] = None
 
             # Merge dataframe with items features
             df_final = df_inter.merge(meta, on="parent_asin", how="left", validate="m:1")
 
-            n_rows_missing = df_final["publisher"].isna().sum()
-            total_rows = len(df_final)
+            meta_presence_cols = [c for c in ["category_seq", "avg_rating", "log_price"] if c in df_final.columns]
 
-            print(f"Rows without meta: {n_rows_missing} / {total_rows} "
-                f"({n_rows_missing / total_rows:.2%})")
-            
-            # Delete items interactions tat have no conncetion with features data
-            df_final = df_final[df_final["publisher"].notna()]
+            if meta_presence_cols:
+                def _is_missing_meta(row):
+                    # treat empty strings as missing too
+                    for c in meta_presence_cols:
+                        v = row[c]
+                        if pd.isna(v):
+                            continue
+                        if isinstance(v, str) and v.strip() == "":
+                            continue
+                        return False
+                    return True
+
+                missing_meta_mask = df_final[meta_presence_cols].apply(_is_missing_meta, axis=1)
+                n_rows_missing = int(missing_meta_mask.sum())
+            else:
+                # fallback if none of the expected columns exist (shouldn't happen)
+                missing_meta_mask = df_final["parent_asin"].isna()
+                n_rows_missing = int(missing_meta_mask.sum())
+
+            missing_meta_mask = df_final[meta_presence_cols].apply(_is_missing_meta, axis=1)
+            n_rows_missing = int(missing_meta_mask.sum())
+
+            total_rows = len(df_final)
+            print(
+                f"Rows without meta: {n_rows_missing} / {total_rows} "
+                f"({(n_rows_missing / total_rows) if total_rows else 0:.2%})"
+            )
+
+            # Drop interactions with no connected metadata
+            df_final = df_final.loc[~missing_meta_mask].copy()
+
             self.unrolled_dataset_total = df_final.copy()
 
-            rename_dict = {
-                'asin': 'item_id',
-            }
+            # Rename for RecBole
+            self.unrolled_dataset_total = self.unrolled_dataset_total.rename(columns={"asin": "item_id"})
 
-            self.unrolled_dataset_total = self.unrolled_dataset_total.rename(columns=rename_dict)
+            # Actually drop
+            if "parent_asin" in self.unrolled_dataset_total.columns:
+                self.unrolled_dataset_total = self.unrolled_dataset_total.drop(columns=["parent_asin"])
 
-            self.unrolled_dataset_total.drop(columns=["parent_asin"])
-
-            self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path)
-
-            # self.user_rating_distribution()
-            # self.user_rating_distributions.to_csv(self.users_rating_distribution_path)
-            # self.global_rating_distribution.to_csv(self.global_fallback_rating_distribution_path)
+            # Save
+            self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path, index=False)
         else:
-            self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path, index_col=0)
+            self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path)
             # self.user_rating_distributions = pd.read_csv(self.users_rating_distribution_path, index_col=0)
             # self.global_rating_distribution = pd.read_csv(self.global_fallback_rating_distribution_path, index_col=0)
-        
-
-
-    def user_rating_distribution(self):
-        if "rating" in self.unrolled_dataset_total.columns:
-            user_rating_dist = (
-                self.unrolled_dataset_total
-                .groupby(['user_id', 'rating'])
-                .size()
-                .groupby(level=0)
-                .apply(lambda x: (x / x.sum()).to_dict())
-                .to_dict()
-            )
-            
-            self.user_rating_distributions = user_rating_dist
-            
-            # Fallback distribution in case of errors (just get the global distribution)
-            global_rating_dist = (
-                self.unrolled_dataset_total['rating']
-                .value_counts(normalize=True)
-                .to_dict()
-            )
-            self.global_rating_distribution = global_rating_dist
-        else:
-            raise f"\n Rating column not found in dataset \n"
 
     def real_dataset_save_cache(self, start_date: datetime, end_date: datetime, users: list, items: list):
         if not self.config.use_cache:
@@ -242,7 +232,7 @@ class AmazonBooksDataset:
                     pass
                 else:
                     raise Exception(f"\n Cache not found or not well formatted -> {self.dump_dataset} \n")
-
+                
     def strategy_simulation_info(self, start_date: datetime, end_date: datetime, users: list, items: list, use_cache: bool = True) -> dict:
         """
             This function define a dict than can be easily accessed later on in order to know what user entered and what has bought, for each date
@@ -271,12 +261,26 @@ class AmazonBooksDataset:
             with open(self.distribution_timeline_path, "rb") as f:
                 self.distribution_dict = pickle.load(f)
         return self.distribution_dict
-
+    
     def normalize_tokens(self, s: str):
         s = str(s).strip()
         s = re.sub(r"\s+", " ", s)
         s = s.replace(" ", "_")
         return s
+    
+    def build_descr_features(self, description, max_chars=2000):
+        if isinstance(description, list):
+            parts = [self.normalize_tokens(x) for x in description if self.normalize_tokens(x)]
+            text = " ".join(parts)
+        elif isinstance(description, str):
+            text = self.normalize_tokens(description)
+        else:
+            text = ""
+        
+        if max_chars is not None and len(text) > max_chars:
+            text = text[:max_chars]
+
+        return text
     
     def categories_to_token_seq(self, cats, drop_roots=True, max_len=30, sep="|"):
         # Input: 
@@ -310,60 +314,3 @@ class AmazonBooksDataset:
                 break
 
         return sep.join(out) if out else None
-
-    def build_descr_features(self, description, max_chars=2000):
-        if isinstance(description, list):
-            parts = [self.normalize_tokens(x) for x in description if self.normalize_tokens(x)]
-            text = " ".join(parts)
-        elif isinstance(description, str):
-            text = self.normalize_tokens(description)
-        else:
-            text = ""
-        
-        if max_chars is not None and len(text) > max_chars:
-            text = text[:max_chars]
-
-        return text
-
-    def extract_details_info(self, details):
-        def clean_publisher(s):
-            if s is None:
-                return None
-            s = str(s).strip()
-            if not s:
-                return None
-
-            # Remove anything after ';' (edition info)
-            s = s.split(";")[0]
-
-            # Remove parenthetical content
-            s = re.sub(r"\(.*?\)", "", s)
-
-            # Normalize whitespace
-            s = re.sub(r"\s+", " ", s).strip()
-
-            return s if s else None
-
-        def clean_language(s):
-            if s is None:
-                return None
-            s = str(s).strip()
-            if not s:
-                return None
-
-            # Normalize capitalization (English, French, German, etc.)
-            s = s.title()
-
-            return s 
-        
-        if not isinstance(details, dict):
-            return None, None
-
-        publisher = clean_publisher(details.get("Publisher"))
-        language = clean_language(details.get("Language"))
-
-        return publisher, language
-
-
-     
-                

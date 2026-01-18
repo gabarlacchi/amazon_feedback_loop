@@ -10,6 +10,7 @@ from dateutil.relativedelta import relativedelta
 import traceback
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
 import itertools
+import pickle
 
 from utils import DotDict
 
@@ -36,13 +37,12 @@ class AmazonSportAndOutdoorDataset:
         except Exception as e:
             print(traceback.format_exc())
 
-        self.distribution_timeline_path = f"./cache/distribution_timeline_amazon_sport&outdoor.csv"
-        self.unrolled_dataset_total_path = f"./cache/unrolled_total_{self.y1}-{self.y2}_amazon_sport&outdoor.csv"
-        self.users_rating_distribution_path = f"./cache/users_rating_distribution_{self.y1}-{self.y2}_amazon_sport&outdoor.csv"
-        self.global_fallback_rating_distribution_path = f"./cache/global_fallback_rating_distribution_{self.y1}-{self.y2}_amazon_sport&outdoor.csv"
-        self.cache_mapping_strings_int_path_users = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_users_amazon_sport&outdoor.csv"
-        self.cache_mapping_strings_int_path_items = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_items_amazon_sport&outdoor.csv"
-        self.dump_dataset = f"./cache/real_dataset_sim_amazon_sport&outdoor"
+        self.distribution_timeline_path = f"./cache/distribution_timeline_amazon_sport_outdoor.csv"
+        self.unrolled_dataset_total_path = f"./cache/unrolled_total_{self.y1}-{self.y2}_amazon_sport_outdoor.csv"
+        self.users_rating_distribution_path = f"./cache/users_rating_distribution_{self.y1}-{self.y2}_amazon_sport_outdoor.csv"
+        self.cache_mapping_strings_int_path_users = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_users_amazon_sport_outdoor.csv"
+        self.cache_mapping_strings_int_path_items = f"./cache/mapping_strings_int_{self.y1}-{self.y2}_items_amazon_sport_outdoor.csv"
+        self.dump_dataset = f"./cache/real_dataset_sim_amazon_sport_outdoor"
         os.makedirs(self.dump_dataset, exist_ok=True)
 
     def setup(self)-> None:
@@ -99,10 +99,12 @@ class AmazonSportAndOutdoorDataset:
 
             to_keep = [
                 "parent_asin",
+                "main_category",
+                "features",
                 "categories",
                 "price",
                 "description",
-                "details"
+                "details",
             ]
             keep = [c for c in to_keep if c in df_features.columns]
             meta = df_features[keep].copy()
@@ -115,6 +117,21 @@ class AmazonSportAndOutdoorDataset:
                 meta["log_price"] = np.log1p(meta["price"])
 
             # ITEM FEATURE(S)
+
+            # MAIN_CATEGORY (new)
+            if "main_category" in meta.columns:
+                meta["main_category"] = meta["main_category"].fillna("Unknown").astype(str)
+            else:
+                meta["main_category"] = "Unknown"
+
+            # FEATURES  
+            if "features" in meta.columns:
+                meta["features_text"] = meta["features"].apply(
+                    lambda x: " | ".join(x) if isinstance(x, list) else ""
+                )
+                meta = meta.drop(columns=["features"])
+            else:
+                meta["features_text"] = ""
 
             # CATEGORIES
             # Store as tokens because most recbole models have tokens logic
@@ -138,69 +155,56 @@ class AmazonSportAndOutdoorDataset:
 
             meta = meta.drop(columns=["description"])
 
-            # DETAILS
-            # It contains publisher and language of the book
-            if "details" in meta.columns:
-                extracted = meta["details"].apply(self.extract_details_info)
-
-                meta["publisher"] = extracted.apply(lambda x: x[0])
-                meta["language"] = extracted.apply(lambda x: x[1])
-
-                meta = meta.drop(columns=["details"])
-
-            meta = meta.drop_duplicates(subset=["parent_asin"])
-
             # Merge dataframe with items features
             df_final = df_inter.merge(meta, on="parent_asin", how="left", validate="m:1")
 
-            n_rows_missing = df_final["publisher"].isna().sum()
-            total_rows = len(df_final)
+            meta_presence_cols = [c for c in ["main_category", "category_seq", "features_text", "log_price", "desc_text"] if c in df_final.columns]
 
-            print(f"Rows without meta: {n_rows_missing} / {total_rows} "
-                f"({n_rows_missing / total_rows:.2%})")
-            
-            # Delete items interactions tat have no conncetion with features data
-            df_final = df_final[df_final["publisher"].notna()]
+            if meta_presence_cols:
+                def _is_missing_meta(row):
+                    # treat empty strings as missing too
+                    for c in meta_presence_cols:
+                        v = row[c]
+                        if pd.isna(v):
+                            continue
+                        if isinstance(v, str) and v.strip() == "":
+                            continue
+                        return False
+                    return True
+
+                missing_meta_mask = df_final[meta_presence_cols].apply(_is_missing_meta, axis=1)
+                n_rows_missing = int(missing_meta_mask.sum())
+            else:
+                # fallback if none of the expected columns exist (shouldn't happen)
+                missing_meta_mask = df_final["parent_asin"].isna()
+                n_rows_missing = int(missing_meta_mask.sum())
+
+            missing_meta_mask = df_final[meta_presence_cols].apply(_is_missing_meta, axis=1)
+            n_rows_missing = int(missing_meta_mask.sum())
+
+            total_rows = len(df_final)
+            print(
+                f"Rows without meta: {n_rows_missing} / {total_rows} "
+                f"({(n_rows_missing / total_rows) if total_rows else 0:.2%})"
+            )
+
+            # Drop interactions with no connected metadata
+            df_final = df_final.loc[~missing_meta_mask].copy()
+
             self.unrolled_dataset_total = df_final.copy()
 
-            rename_dict = {
-                'asin': 'item_id',
-            }
+            # Rename for RecBole
+            self.unrolled_dataset_total = self.unrolled_dataset_total.rename(columns={"asin": "item_id"})
 
-            self.unrolled_dataset_total = self.unrolled_dataset_total.rename(columns=rename_dict)
+            # Actually drop
+            if "parent_asin" in self.unrolled_dataset_total.columns:
+                self.unrolled_dataset_total = self.unrolled_dataset_total.drop(columns=["parent_asin"])
 
-            self.unrolled_dataset_total.drop(columns=["parent_asin"])
-
-            self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path)
-
-            self.user_rating_distribution()
-            self.user_rating_distributions.to_csv(self.users_rating_distribution_path)
-            self.global_rating_distribution.to_csv(self.global_fallback_rating_distribution_path)
+            # Save
+            self.unrolled_dataset_total.to_csv(self.unrolled_dataset_total_path, index=False)
+           
         else:
-            self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path, index_col=0)
-
-    def user_rating_distribution(self):
-        if "rating" in self.unrolled_dataset_total.columns:
-            user_rating_dist = (
-                self.unrolled_dataset_total
-                .groupby(['user_id', 'rating'])
-                .size()
-                .groupby(level=0)
-                .apply(lambda x: (x / x.sum()).to_dict())
-                .to_dict()
-            )
-            
-            self.user_rating_distributions = user_rating_dist
-            
-            # Fallback distribution in case of errors (just get the global distribution)
-            global_rating_dist = (
-                self.unrolled_dataset_total['rating']
-                .value_counts(normalize=True)
-                .to_dict()
-            )
-            self.global_rating_distribution = global_rating_dist
-        else:
-            raise f"\n Rating column not found in dataset \n"
+            self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path)
 
     def real_dataset_save_cache(self, start_date: datetime, end_date: datetime, users: list, items: list):
         if not self.config.use_cache:
@@ -320,42 +324,3 @@ class AmazonSportAndOutdoorDataset:
             text = text[:max_chars]
 
         return text
-
-    def extract_details_info(self, details):
-        def clean_publisher(s):
-            if s is None:
-                return None
-            s = str(s).strip()
-            if not s:
-                return None
-
-            # Remove anything after ';' (edition info)
-            s = s.split(";")[0]
-
-            # Remove parenthetical content
-            s = re.sub(r"\(.*?\)", "", s)
-
-            # Normalize whitespace
-            s = re.sub(r"\s+", " ", s).strip()
-
-            return s if s else None
-
-        def clean_language(s):
-            if s is None:
-                return None
-            s = str(s).strip()
-            if not s:
-                return None
-
-            # Normalize capitalization (English, French, German, etc.)
-            s = s.title()
-
-            return s 
-        
-        if not isinstance(details, dict):
-            return None, None
-
-        publisher = clean_publisher(details.get("Publisher"))
-        language = clean_language(details.get("Language"))
-
-        return publisher, language
