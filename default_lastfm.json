@@ -1,6 +1,6 @@
 {
     "dataset": "lastfm",
-    "recbole_folder": "models_tmp_2",
+    "recbole_folder": "models_tmp_1",
     "frequent_costumers": true,
     "random_sample_users": false,
     "time_window": "2006-2012",
@@ -8,10 +8,9 @@
     "n_reps": 1,
     "use_cache": true,
     "recommender_model": {
-        "model_name": "CF_KNN_item",
-        "epochs": 1,
-        "k": 200,
-        "shrink": 0.0
+        "model_name": "BPR",
+        "epochs": 25,
+        "learning_rate": 0.001
     },
     "user_strategy": {
         "model_name": "Custom choice model",
