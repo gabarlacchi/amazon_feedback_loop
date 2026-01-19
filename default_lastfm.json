@@ -1,6 +1,6 @@
 {
     "dataset": "lastfm",
-    "recbole_folder": "models_tmp_2",
+    "recbole_folder": "models_tmp_1",
     "frequent_costumers": true,
     "random_sample_users": false,
     "time_window": "2006-2012",
@@ -10,7 +10,7 @@
     "recommender_model": {
         "model_name": "CF_KNN_item",
         "epochs": 1,
-        "k": 200,
+        "k": 100,
         "shrink": 0.0
     },
     "user_strategy": {

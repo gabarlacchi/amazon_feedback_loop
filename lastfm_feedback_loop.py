@@ -38,6 +38,7 @@ from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, 
 from amazonecommerce_dataset import AmazonECommerceDataset
 from choice_model import ChoiceModel
 
+
 class LastFMFeedbackLoop():
     def __init__(self, config: DotDict, initialization_dataset: AmazonECommerceDataset, **kwargs):
 
@@ -955,6 +956,15 @@ class LastFMFeedbackLoop():
                 ).to(self.model_config["device"])
 
     def _fit_with_tracking(self, trainer: Trainer, save_stem: str, show_progress: bool = False, save_plots: bool = False):
+
+        from recbole.config import Config
+
+        # Check what device RecBole is using
+        print(f"\n RecBole device: {self.model_config['device']} \n")
+        print(f"\n cuda available: {torch.cuda.is_available()} \n")
+        if not torch.cuda.is_available():
+            trainer.device = torch.device('cpu')
+
         all_validation_results = []
         all_test_results = []
         all_train_losses = []
@@ -976,6 +986,7 @@ class LastFMFeedbackLoop():
             test_result = trainer.evaluate(self.test_data, load_best_model=False, show_progress=False)
             all_test_results.append(test_result)
             return valid_result
+
 
         # ---- patch ----
         trainer._train_epoch = custom_train_epoch
@@ -1056,7 +1067,7 @@ class LastFMFeedbackLoop():
         
         # Create trainer
         trainer = Trainer(self.model_config, self.recbole_model)
-        
+
         self.logger.info("[Epoch 0] Starting initial model training and evaluation")
         self._fit_with_tracking(
             trainer=trainer,
