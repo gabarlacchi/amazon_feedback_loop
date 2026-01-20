@@ -311,7 +311,8 @@ class AmazonECommerceFeedbackLoop():
 
         return unrolled
 
-    def init_recbole_model(self, is_first_init=False, warm_start=True):
+
+    def init_recbole_model(self, is_first_init=False, warm_start=True, results_path=None):
 
         # Some models need custom implemention, add here
         CUSTOM_MODELS = {
@@ -324,6 +325,7 @@ class AmazonECommerceFeedbackLoop():
             "DeepFM",
             "EASE",
             "NFM",
+            "FM",
             "DCNV2"
         }
         custom_model_map = {
@@ -336,6 +338,7 @@ class AmazonECommerceFeedbackLoop():
             "DeepFM": DeepFM,
             "EASE": EASE,
             "NFM": NFM,
+            "FM": FM,
             "DCNV2": DCNV2
         }
 
@@ -357,8 +360,7 @@ class AmazonECommerceFeedbackLoop():
                 "xDeepFM": "xDeepFM",
                 "DCNV2": "DCNV2",
                 "FM": "FM",
-                "NFM": "NFM",
-                "DCNV2": "DCNV2"
+                "NFM": "NFM"
             }
 
             try:
@@ -371,19 +373,17 @@ class AmazonECommerceFeedbackLoop():
 
             CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "NFM"}
             needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
+            # !!
             needs_features = True
 
             base_inter_cols = ["user_id", "item_id", "timestamp", "label"]
 
-            if needs_features:
-                base_inter_cols.append("interaction_count")
+            # if needs_features:
+            #     base_inter_cols.append("interaction_count")
             
             if needs_features:
-                user_cols = ["user_id", "age", "race", "education", "income", "gender","how_often_use_amazon", "smoke_cigarettes", "has_diabet"]
-                if self.item_id_col == "item_id":
-                    item_cols = ["category"]
-                else:
-                    item_cols = None
+                user_cols = ["user_id", "age", "country", "gender"]
+                item_cols = ["item_id"]
 
             else:
                 user_cols = None
@@ -514,7 +514,7 @@ class AmazonECommerceFeedbackLoop():
 
             for attr, key in MODEL_PARAMS[self.model_name_recbole]:
                 add_param(attr, key)
-
+            
             # NOT IT WORKS FOR STANDARD MODELS
             # FOR USER KNN THE LIBRARY DOES NOT RECOGNIZE THE MODEL
             # SO FAR, I DID NOT UNDERSTAND HOW TO HANDLE IT 
@@ -542,7 +542,7 @@ class AmazonECommerceFeedbackLoop():
 
             # print(self.parameter_dict)
             # exit()
-            
+
             try:
                 self.model_config = Config(
                     model=self.model_name_recbole,
@@ -567,7 +567,6 @@ class AmazonECommerceFeedbackLoop():
                 print(traceback.format_exc())
                 raise Exception(f"Error during the initialization of the dataset -> {e}")
 
-
             if self.use_custom_model:
                 model_cls = custom_model_map[self.model_name_recbole]
             else:
@@ -579,6 +578,15 @@ class AmazonECommerceFeedbackLoop():
             ).to(self.model_config["device"])
             
             self._first_init_complete = True
+
+            # !! Roughly initiated
+            evaluate_initial = True
+
+            if evaluate_initial:
+                self.logger.info("[Epoch 0] Evaluating initial model before simulation")
+                initial_metrics = self.evaluate_initial_model(show_progress=False, save_dir=results_path)
+                self.logger.info(f"[Epoch 0] Initial metrics: {initial_metrics}")
+
         else:
             try:
                 self.recbole_dataset = create_dataset(self.model_config)
@@ -623,208 +631,319 @@ class AmazonECommerceFeedbackLoop():
                     self.train_data.dataset
                 ).to(self.model_config["device"])
 
-    def init_recbole_model_old(self, is_first_init=False):
-        name_map = {
-            "Collective Popularity": "Pop",
-            "Collective Random": "Random",
-            "CF_KNN_item": "ItemKNN",
-            "MultiVAE": "MultiVAE",
-            "BPR": "BPR",
-            "LightGCN": "LightGCN",
-            "SpectralCF": "SpectralCF",
-            "NGCF":"NGCF",
-            "SGL": "SGL",
-            "EASE": "EASE",
-            "NeuMF": "NeuMF",
-            "DeepFM": "DeepFM", 
-            "xDeepFM": "xDeepFM",
-            "DCNV2": "DCNV2",
-            "FM": "FM"
-        }
-        try:
-            self.raw_model_name = self.config.recommender_model.model_name
-            self.model_name_recbole = name_map[self.raw_model_name]
-        except Exception as e:
-            traceback.print_exc()
-            raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
+    # def init_recbole_model(self, is_first_init=False, warm_start=True):
 
-        CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "MultiVAE"}
-        needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
-        needs_features = True
+        # # Some models need custom implemention, add here
+        # CUSTOM_MODELS = {
+        #     "NeuMF",
+        #     "BPR",
+        #     "UserKNN",
+        #     "ItemKNN",
+        #     "SpectralCF",
+        #     "FM",
+        #     "DeepFM",
+        #     "EASE",
+        #     "NFM",
+        #     "DCNV2"
+        # }
+        # custom_model_map = {
+        #     "NeuMF": NeuMF,
+        #     "BPR": BPR,
+        #     "UserKNN": UserKNN,
+        #     "ItemKNN": ItemKNN,
+        #     "SpectralCF": SpectralCF,
+        #     "FM": FM,
+        #     "DeepFM": DeepFM,
+        #     "EASE": EASE,
+        #     "NFM": NFM,
+        #     "DCNV2": DCNV2
+        # }
 
-        base_inter_cols = ["user_id", "item_id", "timestamp", "label"]
+        # if is_first_init or not hasattr(self, 'model_config'):
+        #     name_map = {
+        #         "Collective Popularity": "Pop",
+        #         "Collective Random": "Random",
+        #         "CF_KNN_item": "ItemKNN",
+        #         "CF_KNN_user": "UserKNN",
+        #         "MultiVAE": "MultiVAE",
+        #         "BPR": "BPR",
+        #         "LightGCN": "LightGCN",
+        #         "SpectralCF": "SpectralCF",
+        #         "NGCF":"NGCF",
+        #         "SGL": "SGL",
+        #         "EASE": "EASE",
+        #         "NeuMF": "NeuMF",
+        #         "DeepFM": "DeepFM", 
+        #         "xDeepFM": "xDeepFM",
+        #         "DCNV2": "DCNV2",
+        #         "FM": "FM",
+        #         "NFM": "NFM",
+        #         "DCNV2": "DCNV2"
+        #     }
 
-        if needs_features:
-            base_inter_cols.append("interaction_count")
-        
-        if needs_features:
-            # k=0 ran first, so these should exist
-            user_cols = getattr(self, "user_cols_recbole", None)
-            item_cols = getattr(self, "user_cols_recbole", None)
+        #     try:
+        #         self.raw_model_name = self.config.recommender_model.model_name
+        #         self.model_name_recbole = name_map[self.raw_model_name]
+        #         self.use_custom_model = self.model_name_recbole in CUSTOM_MODELS
+        #     except Exception as e:
+        #         traceback.print_exc()
+        #         raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
 
-            if not user_cols or not item_cols:
-                raise RuntimeError(
-                    "Feature schema not found. Ensure _build_window_for_epoch(k=0) "
-                    "ran before init_recbole_model()."
-                )
-        else:
-            user_cols = None
-            item_cols = None
+        #     CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "NFM"}
+        #     needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
+        #     needs_features = True
 
-        # if needs_features:
-        #     user_cols = ["user_id", "age", "race", "education", "income", "gender",
-        #                 "how_often_use_amazon", "smoke_cigarettes", "has_diabet"]
-        #     item_cols = ["item_id", "category", "title"]
-        # else:
-        #     user_cols = None  
-        #     item_cols = None 
+        #     base_inter_cols = ["user_id", "item_id", "timestamp", "label"]
 
-        self.parameter_dict = {
-            'data_path': self.tmp_folder,
-            'checkpoint_dir': os.path.join(self.tmp_folder, "checkpoints"),
-
-            "USER_ID_FIELD": "user_id",
-            "ITEM_ID_FIELD": "item_id",
-            "TIME_FIELD": "timestamp",
-            "LABEL_FIELD": "label",
-
-            "load_col": {
-                "inter": base_inter_cols,
-            },
-
-            # Training settings
-            "epochs": getattr(self.config.recommender_model, "epochs", 10),
-            "eval_args": {
-                "group_by": "user", 
-                "order": "TO",  # Time-ordered
-                "mode": "full"  # Full ranking
-            },
-            "benchmark_filename": ["train", "val", "test"],
+        #     if needs_features:
+        #         base_inter_cols.append("interaction_count")
             
-            # Reproducibility
-            "reproducibility": True,
-            "seed": self.master_seed,
+        #     if needs_features:
+        #         user_cols = ["user_id", "age", "race", "education", "income", "gender","how_often_use_amazon", "smoke_cigarettes", "has_diabet"]
+        #         if self.item_id_col == "item_id":
+        #             item_cols = ["category"]
+        #         else:
+        #             item_cols = None
 
-            # Evaluation metrics
-            "metrics": ["NDCG", "Recall", "Precision", "Hit", "ItemCoverage", "MRR", "MAP"],
-            "topk": 10,
-            "valid_metric": "NDCG@10",
+        #     else:
+        #         user_cols = None
+        #         item_cols = None
 
-            # Negative sampling for implicit feedback
-            "train_neg_sample_args": {"distribution": "uniform", "sample_num": 1},
+        #     self.parameter_dict = {
+        #         'data_path': self.tmp_folder,
+        #         'checkpoint_dir': os.path.join(self.tmp_folder, "checkpoints"),
 
-            # GPU settings
-            "use_gpu": torch.cuda.is_available(),
-            "gpu_id": 0,
-        }
+        #         "USER_ID_FIELD": "user_id",
+        #         "ITEM_ID_FIELD": "item_id",
+        #         "TIME_FIELD": "timestamp",
+        #         "LABEL_FIELD": "label",
 
-        if user_cols:
-            self.parameter_dict["load_col"]["user"] = user_cols
-        if item_cols:
-            self.parameter_dict["load_col"]["item"] = item_cols
+        #         "load_col": {
+        #             "inter": base_inter_cols,
+        #         },
 
-        # Helper function to add parameters if they exist
-        def add_param(attr, key=None):
-            if model_cfg and hasattr(model_cfg, attr):
-                val = getattr(model_cfg, attr)
-                if val is not None:  # Only add non-None values
-                    self.parameter_dict[key or attr] = val
+        #         # Training settings
+        #         "epochs": getattr(self.config.recommender_model, "epochs", 10),
+        #         "eval_args": {
+        #             "group_by": "user", 
+        #             "order": "TO",
+        #             "mode": "full"
+        #         },
+        #         "benchmark_filename": ["train", "val", "test"],
+                
+        #         # Reproducibility
+        #         "reproducibility": True,
+        #         "seed": self.master_seed,
 
-        # Optional per-model parameters pulled from config
-        model_cfg = getattr(self.config, "recommender_model", None)
+        #         # Evaluation metrics
+        #         "metrics": ["NDCG", "Recall", "Precision", "Hit", "ItemCoverage", "MRR", "MAP"],
+        #         "topk": 10,
+        #         "valid_metric": "NDCG@10",
 
-        add_param("learning_rate")
-        add_param("epochs")
+        #         # Negative sampling for implicit feedback
+        #         "train_neg_sample_args": {"distribution": "uniform", "sample_num": 1},
 
-        # Model-specific parameters
-        MODEL_PARAMS = {
-            "ItemKNN": [("k", "k"), ("shrink", "shrink")],
-            "BPR": [("reg_weight", "reg_weight")],
-            "LightGCN": [("reg_weight", "reg_weight"), ("n_layers", "n_layers")],
-            "NeuMF": [
-                ("mlp_hidden_size", "mlp_hidden_size"),
-                ("user_embedding_size", "mlp_embedding_size"),
-                ("item_embedding_size", "mf_embedding_size")
-            ],
-            "MultiVAE": [
-                ("mlp_hidden_size", "mlp_hidden_size"),
-                ("dropout_prob", "dropout_prob"),
-                ("latent_dimension", "latent_dimension")
-            ],
-            "SpectralCF": [("n_layers", "n_layers"), ("reg_weight", "reg_weight")],
-            "NGCF": [
-                ("embedding_size", "embedding_size"),
-                ("hidden_size_list", "hidden_size_list"),
-                ("node_dropout", "node_dropout"),
-                ("message_dropout", "message_dropout"),
-                ("reg_weight", "reg_weight")
-            ],
-            "SGL": [
-                ("embedding_size", "embedding_size"),
-                ("n_layers", "n_layers"),
-                ("reg_weight", "reg_weight"),
-                ("ssl_tau", "ssl_tau"),
-                ("ssl_weight", "ssl_weight"),
-                ("drop_ratio", "drop_ratio"),
-                ("type", "type")
-            ],
-            "EASE": [("reg_weight", "reg_weight")],
-            "DeepFM": [
-                ("embedding_size", "embedding_size"),
-                ("mlp_hidden_size", "mlp_hidden_size"),
-                ("dropout_prob", "dropout_prob")
-            ],
-            "xDeepFM": [
-                ("embedding_size", "embedding_size"),
-                ("mlp_hidden_size", "mlp_hidden_size"),
-                ("dropout_prob", "dropout_prob"),
-                ("reg_weight", "reg_weight"),
-                ("cin_layer_size", "cin_layer_size"),
-                ("direct", "direct")
-            ],
-            "DCNV2": [
-                ("embedding_size", "embedding_size"),
-                ("cross_layer_num", "cross_layer_num"),
-                ("mlp_hidden_size", "mlp_hidden_size"),
-                ("dropout_prob", "dropout_prob"),
-                ("reg_weight", "reg_weight"),
-                ("structure", "structure"),
-                ("mixed", "mixed"),
-                ("expert_num", "expert_num"),
-                ("low_rank", "low_rank")
-            ],
-            "FM": [("embedding_size", "embedding_size")]
-        }
+        #         # GPU settings
+        #         "use_gpu": torch.cuda.is_available(),
+        #         "gpu_id": 0,
+        #     }
 
-        # Apply model-specific parameters
-        for attr, key in MODEL_PARAMS[self.model_name_recbole]:
-            add_param(attr, key)
+        #     if user_cols:
+        #         self.parameter_dict["load_col"]["user"] = user_cols
+        #     if item_cols:
+        #         self.parameter_dict["load_col"]["item"] = item_cols
 
-        try:
-            self.model_config = Config(
-                model=self.model_name_recbole,
-                dataset="experiment_dataset",
-                config_dict=self.parameter_dict
-            )
-            init_seed(self.model_config["seed"], self.model_config["reproducibility"])
-            init_logger(self.model_config)
-            self.logger = getLogger()
-        except Exception as e:
-            raise Exception(f"Error during the configuration of the model -> {e}")
+        #     # Helper function to add parameters if they exist
+        #     def add_param(attr, key=None):
+        #         if model_cfg and hasattr(model_cfg, attr):
+        #             val = getattr(model_cfg, attr)
+        #             if val is not None:
+        #                 self.parameter_dict[key or attr] = val
 
-        try:
-            self.recbole_dataset = create_dataset(self.model_config)
-            self.train_data, self.valid_data, self.test_data = data_preparation(
-                config=self.model_config,
-                dataset=self.recbole_dataset
-            )
-            self.logger.info(self.train_data)
-        except Exception as e:
-            print(traceback.format_exc())
-            raise Exception(f"Error during the initialization of the dataset -> {e}")
+        #     model_cfg = getattr(self.config, "recommender_model", None)
 
-        model_cls = get_model(self.model_config["model"])
-        self.recbole_model = model_cls(self.model_config, self.train_data.dataset).to(self.model_config["device"])
+        #     add_param("learning_rate")
+        #     add_param("epochs")
+
+        #     # Model-specific parameters
+        #     MODEL_PARAMS = {
+        #         "Random": [],
+        #         "ItemKNN": [("k", "k"), ("shrink", "shrink")],
+        #         "UserKNN": [("k", "k"), ("shrink", "shrink")],
+        #         "BPR": [("reg_weight", "reg_weight")],
+        #         "LightGCN": [("reg_weight", "reg_weight"), ("n_layers", "n_layers")],
+        #         "NeuMF": [
+        #             ("mlp_hidden_size", "mlp_hidden_size"),
+        #             ("user_embedding_size", "mlp_embedding_size"),
+        #             ("item_embedding_size", "mf_embedding_size"),
+        #             ("dropout_prob", "dropout_prob"),
+        #         ],
+        #         "MultiVAE": [
+        #             ("mlp_hidden_size", "mlp_hidden_size"),
+        #             ("dropout_prob", "dropout_prob"),
+        #             ("latent_dimension", "latent_dimension")
+        #         ],
+        #         "SpectralCF": [("n_layers", "n_layers"), ("reg_weight", "reg_weight")],
+        #         "NGCF": [
+        #             ("embedding_size", "embedding_size"),
+        #             ("hidden_size_list", "hidden_size_list"),
+        #             ("node_dropout", "node_dropout"),
+        #             ("message_dropout", "message_dropout"),
+        #             ("reg_weight", "reg_weight")
+        #         ],
+        #         "SGL": [
+        #             ("embedding_size", "embedding_size"),
+        #             ("n_layers", "n_layers"),
+        #             ("reg_weight", "reg_weight"),
+        #             ("ssl_tau", "ssl_tau"),
+        #             ("ssl_weight", "ssl_weight"),
+        #             ("drop_ratio", "drop_ratio"),
+        #             ("type", "type")
+        #         ],
+        #         "EASE": [("reg_weight", "reg_weight")],
+        #         "DeepFM": [
+        #             ("embedding_size", "embedding_size"),
+        #             ("mlp_hidden_size", "mlp_hidden_size"),
+        #             ("dropout_prob", "dropout_prob")
+        #         ],
+        #         "xDeepFM": [
+        #             ("embedding_size", "embedding_size"),
+        #             ("mlp_hidden_size", "mlp_hidden_size"),
+        #             ("dropout_prob", "dropout_prob"),
+        #             ("reg_weight", "reg_weight"),
+        #             ("cin_layer_size", "cin_layer_size"),
+        #             ("direct", "direct")
+        #         ],
+        #         "DCNV2": [
+        #             ("embedding_size", "embedding_size"),
+        #             ("cross_layer_num", "cross_layer_num"),
+        #             ("mlp_hidden_size", "mlp_hidden_size"),
+        #             ("dropout_prob", "dropout_prob"),
+        #             ("reg_weight", "reg_weight"),
+        #             ("structure", "structure"),
+        #             ("mixed", "mixed"),
+        #             ("expert_num", "expert_num"),
+        #             ("low_rank", "low_rank")
+        #         ],
+        #         "FM": [("embedding_size", "embedding_size")],
+        #         "NFM": [
+        #             ("dropout_prob", "dropout_prob"),
+        #             ("mlp_hidden_size", "mlp_hidden_size")
+        #         ]
+        #     }
+
+        #     for attr, key in MODEL_PARAMS[self.model_name_recbole]:
+        #         add_param(attr, key)
+
+        #     # NOT IT WORKS FOR STANDARD MODELS
+        #     # FOR USER KNN THE LIBRARY DOES NOT RECOGNIZE THE MODEL
+        #     # SO FAR, I DID NOT UNDERSTAND HOW TO HANDLE IT 
+        #     # IF I UNCOMMENT THE FOLLOWING, THE OTHER CUSTOM MODELS WORKS DIFFERENTLY BECAUSE THE DEFAULT PARAMETERS ARE DIFFERENT
+        #     # try:
+        #     #     # For custom models, use a dummy valid model name for Config validation
+        #     #     config_model_name = "BPR" if self.use_custom_model else self.model_name_recbole
+                
+        #     #     self.model_config = Config(
+        #     #         model=config_model_name,  # Use dummy name for custom models
+        #     #         dataset="experiment_dataset",
+        #     #         config_dict=self.parameter_dict
+        #     #     )
+                
+        #     #     # Override with actual model name after Config is created
+        #     #     if self.use_custom_model:
+        #     #         self.model_config["model"] = self.model_name_recbole
+                
+        #     #     init_seed(self.model_config["seed"], self.model_config["reproducibility"])
+        #     #     init_logger(self.model_config)
+        #     #     self.logger = getLogger()
+        #     #     self.logger.info(f"[Epoch 0] Full initialization complete")
+        #     # except Exception as e:
+        #     #     raise Exception(f"Error during the configuration of the model -> {e}")
+
+        #     # print(self.parameter_dict)
+        #     # exit()
+            
+        #     try:
+        #         self.model_config = Config(
+        #             model=self.model_name_recbole,
+        #             dataset="experiment_dataset",
+        #             config_dict=self.parameter_dict
+        #         )
+        #         init_seed(self.model_config["seed"], self.model_config["reproducibility"])
+        #         init_logger(self.model_config)
+        #         self.logger = getLogger()
+        #         self.logger.info(f"[Epoch 0] Full initialization complete")
+        #     except Exception as e:
+        #         raise Exception(f"Error during the configuration of the model -> {e}")
+
+        #     try:
+        #         self.recbole_dataset = create_dataset(self.model_config)
+        #         self.train_data, self.valid_data, self.test_data = data_preparation(
+        #             config=self.model_config,
+        #             dataset=self.recbole_dataset
+        #         )
+        #         self.logger.info(self.train_data)
+        #     except Exception as e:
+        #         print(traceback.format_exc())
+        #         raise Exception(f"Error during the initialization of the dataset -> {e}")
+
+
+        #     if self.use_custom_model:
+        #         model_cls = custom_model_map[self.model_name_recbole]
+        #     else:
+        #         model_cls = get_model(self.model_config["model"])
+
+        #     self.recbole_model = model_cls(
+        #         self.model_config, 
+        #         self.train_data.dataset
+        #     ).to(self.model_config["device"])
+            
+        #     self._first_init_complete = True
+        # else:
+        #     try:
+        #         self.recbole_dataset = create_dataset(self.model_config)
+        #         self.train_data, self.valid_data, self.test_data = data_preparation(
+        #             config=self.model_config,
+        #             dataset=self.recbole_dataset
+        #         )
+
+        #     except Exception as e:
+        #         print(traceback.format_exc())
+        #         raise Exception(f"Error during incremental dataset update -> {e}")
+        
+        #     if warm_start and hasattr(self, 'recbole_model'):
+        #         old_n_users = self.recbole_model.n_users
+        #         old_n_items = self.recbole_model.n_items
+        #         new_n_users = self.train_data.dataset.user_num
+        #         new_n_items = self.train_data.dataset.item_num
+                
+        #         if new_n_users > old_n_users or new_n_items > old_n_items:
+        #             self.logger.warning(
+        #                 f"[Warm Start] Vocabulary expanded: "
+        #                 f"users {old_n_users}→{new_n_users}, "
+        #                 f"items {old_n_items}→{new_n_items}"
+        #             )
+        #             if self.use_custom_model:
+        #                 model_cls = custom_model_map[self.model_name_recbole]
+        #             else:
+        #                 model_cls = get_model(self.model_config["model"])
+        #             self.recbole_model = model_cls(
+        #                 self.model_config, 
+        #                 self.train_data.dataset
+        #             ).to(self.model_config["device"])
+        #         else:
+        #             pass
+        #     else:
+        #         if self.use_custom_model:
+        #             model_cls = custom_model_map[self.model_name_recbole]
+        #         else:
+        #             model_cls = get_model(self.model_config["model"])
+        #         self.recbole_model = model_cls(
+        #             self.model_config, 
+        #             self.train_data.dataset
+        #         ).to(self.model_config["device"])
+
+   
 
     def tuning_hyperparameters(self) -> None:
         hyper_file = f"tuning_parameters/{self.model_name_config}.hyper"
@@ -944,6 +1063,35 @@ class AmazonECommerceFeedbackLoop():
         
         return train_df, val_df, test_df
 
+    def evaluate_initial_model(self, save_dir: str = None, show_progress: bool = False):
+
+        if not hasattr(self, 'recbole_model') or not hasattr(self, 'train_data'):
+            raise RuntimeError("Model must be initialized first. Call init_recbole_model(is_first_init=True)")
+        
+        # Set up save directory
+        save_stem = os.path.join(save_dir, "epoch_0")
+        
+        # Create trainer
+        trainer = Trainer(self.model_config, self.recbole_model)
+        
+        self.logger.info("[Epoch 0] Starting initial model training and evaluation")
+        self._fit_with_tracking(
+            trainer=trainer,
+            save_stem=save_stem,
+            show_progress=show_progress,
+            save_plots=False
+        )
+        
+        # Load the final test metrics that were saved
+        metrics_file = f"{save_stem}_final_test_metrics.json"
+        if os.path.exists(metrics_file):
+            with open(metrics_file, 'r') as f:
+                final_metrics = json.load(f)
+            self.logger.info(f"[Epoch 0] Initial evaluation complete. Metrics saved to {metrics_file}")
+            return final_metrics
+        else:
+            self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
+            return None
     def _build_window_for_epoch(self, k: int = 0, new_interactions = None):
         # FIRST INITIALIZATION OF THE DATASET
         if k == 0:

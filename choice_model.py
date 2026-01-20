@@ -40,6 +40,8 @@ class ChoiceModel():
             self.feedback_type = "explicit"
         elif self.config.dataset == "lastfm":
             self.feedback_type = "implicit"
+        elif self.config.dataset == "movielens":
+            self.feedback_type = "explicit"
 
         self.tau = config.user_strategy.tau
 
