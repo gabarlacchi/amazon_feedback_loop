@@ -469,6 +469,8 @@ class AmazonBooksFeedbackLoop():
             show_progress=show_progress,
             save_plots=False
         )
+
+        exit()
         
         # Load the final test metrics that were saved
         metrics_file = f"{save_stem}_final_test_metrics.json"
@@ -481,7 +483,7 @@ class AmazonBooksFeedbackLoop():
             self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
             return None
     
-    def init_recbole_model(self, is_first_init=False, warm_start=True):
+    def init_recbole_model(self, is_first_init=False, warm_start=True, results_path=None):
 
         # Some models need custom implemention, add here
         CUSTOM_MODELS = {
@@ -753,7 +755,7 @@ class AmazonBooksFeedbackLoop():
 
             if evaluate_initial:
                 self.logger.info("[Epoch 0] Evaluating initial model before simulation")
-                initial_metrics = self.evaluate_initial_model(show_progress=False)
+                initial_metrics = self.evaluate_initial_model(show_progress=False, save_dir=results_path)
                 self.logger.info(f"[Epoch 0] Initial metrics: {initial_metrics}")
 
         else:

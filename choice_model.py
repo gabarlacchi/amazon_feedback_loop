@@ -40,6 +40,8 @@ class ChoiceModel():
             self.feedback_type = "explicit"
         elif self.config.dataset == "lastfm":
             self.feedback_type = "implicit"
+        elif self.config.dataset == "movielens":
+            self.feedback_type = "explicit"
 
         self.tau = config.user_strategy.tau
 
@@ -237,6 +239,88 @@ class ChoiceModel():
 
             results[user_id] = pd.Series(norm_utilities, index=all_items)
 
+        return pd.DataFrame(results)
+
+    def _compute_utilities_explicit_new_to_test(self, df, candidate_sets, all_items, rating_col):
+        lambda_rare_items = 0.1
+        
+        # Global statistics
+        global_item_stats = df.groupby("item_id")[rating_col].agg(['mean', 'count'])
+        global_mean_rating = global_item_stats['mean'].to_dict()
+        global_rating_counts = global_item_stats['count'].to_dict()
+        
+        N = df['user_id'].nunique()
+        rating_min = df[rating_col].min()
+        rating_max = df[rating_col].max()
+        rating_range = rating_max - rating_min
+        
+        if rating_range == 0:
+            rating_range = 1  # Prevent division by zero if all ratings are the same
+        
+        grouped = df.groupby('user_id')
+        results = {}
+        
+        for user_id, user_df in grouped:
+            candidate_set = candidate_sets[user_id]
+            user_df = user_df[user_df[self.item_col].isin(candidate_set)]
+            
+            # User baseline: mean rating
+            r_u_bar = user_df[rating_col].mean()
+            
+            # User diversity: Gini coefficient
+            # Group by rating value and count occurrences
+            user_rating_counts = user_df.groupby(rating_col).size()
+            
+            # Ensure we have an array for Gini computation
+            rating_count_array = user_rating_counts.values  # This is a 1D numpy array
+            
+            # Compute Gini (measures concentration of ratings)
+            # High Gini = user gives same ratings often (e.g., all 5★)
+            # Low Gini = user spreads ratings evenly (e.g., mix of 1★, 2★, 3★, 4★, 5★)
+            if len(rating_count_array) > 1:
+                gini_u = self.compute_gini(rating_count_array)
+            else:
+                # If user only gave one rating value, Gini is undefined, set to 1 (max concentration)
+                gini_u = 1.0
+            
+            gini_mod = 1 - gini_u  # Diversity score (higher = more diverse)
+            
+            # User's mean rating per item
+            user_item_ratings = user_df.groupby(self.item_col)[rating_col].mean()
+            
+            utilities = []
+            
+            for item in all_items:
+                # Novelty bonus (inverse of popularity)
+                n_i = global_rating_counts.get(item, 1)
+                novelty = 1 / (1 + n_i / N)
+                
+                if item in user_item_ratings.index:
+                    # Rated item: use actual rating
+                    r_ui = user_item_ratings[item]
+                    deviation = (r_ui - r_u_bar) / rating_range
+                    
+                    utility = r_u_bar + gini_mod * deviation + lambda_rare_items * novelty
+                else:
+                    # Unrated item: use global mean with penalty
+                    r_i_global = global_mean_rating.get(item, (rating_min + rating_max) / 2)
+                    deviation = (r_i_global - r_u_bar) / rating_range
+                    
+                    # Apply 0.5 penalty to deviation for unrated items (uncertainty)
+                    utility = r_u_bar + gini_mod * deviation * 0.5 + lambda_rare_items * novelty
+                
+                utilities.append(utility)
+            
+            # Add noise
+            eta = np.random.normal(0, 0.01, size=len(all_items))
+            utilities = np.array(utilities) + eta
+            
+            # Normalize via softmax (exponential normalization)
+            exp_utilities = np.exp(utilities - utilities.max())
+            norm_utilities = exp_utilities / (exp_utilities.sum() + 1e-8)
+            
+            results[user_id] = pd.Series(norm_utilities, index=all_items)
+        
         return pd.DataFrame(results)
 
     def _compute_utilities_implicit(self, df, lambda_rare_items, candidate_sets):

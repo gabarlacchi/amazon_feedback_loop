@@ -1,0 +1,72 @@
+embedding_size:64, hidden_size_list:[32,32], learning_rate:0.07084500390070969, message_dropout:0.09329685857571048, node_dropout:0.08965221252147805, reg_weight:0.0011148094899410008
+Valid result:
+ndcg@10 : 0.7402    recall@10 : 0.1099    precision@10 : 0.7089    hit@10 : 0.9338    itemcoverage@10 : 0.1555    mrr@10 : 0.8714    map@10 : 0.6654
+Test result:
+ndcg@10 : 0.6539    recall@10 : 0.0959    precision@10 : 0.6239    hit@10 : 0.898    itemcoverage@10 : 0.1628    mrr@10 : 0.7911    map@10 : 0.58
+
+embedding_size:32, hidden_size_list:[64,64], learning_rate:0.014617262348945864, message_dropout:0.048599886326109606, node_dropout:0.1897399942211816, reg_weight:0.0027794867879855716
+Valid result:
+ndcg@10 : 0.7496    recall@10 : 0.1116    precision@10 : 0.7291    hit@10 : 0.9371    itemcoverage@10 : 0.1532    mrr@10 : 0.8618    map@10 : 0.6823
+Test result:
+ndcg@10 : 0.6714    recall@10 : 0.0989    precision@10 : 0.6469    hit@10 : 0.8863    itemcoverage@10 : 0.1589    mrr@10 : 0.7927    map@10 : 0.6039
+
+embedding_size:128, hidden_size_list:[128,128,128], learning_rate:0.06917962694032233, message_dropout:0.14266806151470668, node_dropout:0.1656802492249623, reg_weight:0.004903585134229671
+Valid result:
+ndcg@10 : 0.7767    recall@10 : 0.1172    precision@10 : 0.7487    hit@10 : 0.9536    itemcoverage@10 : 0.158    mrr@10 : 0.9    map@10 : 0.7136
+Test result:
+ndcg@10 : 0.6909    recall@10 : 0.1014    precision@10 : 0.6589    hit@10 : 0.9125    itemcoverage@10 : 0.1643    mrr@10 : 0.8308    map@10 : 0.6241
+
+embedding_size:128, hidden_size_list:[128,128,128], learning_rate:0.004436621435002496, message_dropout:0.022709045222797097, node_dropout:0.08992620481086862, reg_weight:0.1814622173309744
+Valid result:
+ndcg@10 : 0.8499    recall@10 : 0.1467    precision@10 : 0.8258    hit@10 : 0.9536    itemcoverage@10 : 0.189    mrr@10 : 0.9336    map@10 : 0.8136
+Test result:
+ndcg@10 : 0.774    recall@10 : 0.1354    precision@10 : 0.7417    hit@10 : 0.9329    itemcoverage@10 : 0.2017    mrr@10 : 0.9004    map@10 : 0.7254
+
+embedding_size:64, hidden_size_list:[64,64], learning_rate:0.20681809289750563, message_dropout:0.09134261937008836, node_dropout:0.20854168727151715, reg_weight:0.0004035995839906948
+Valid result:
+ndcg@10 : 0.6472    recall@10 : 0.0888    precision@10 : 0.6149    hit@10 : 0.9205    itemcoverage@10 : 0.1229    mrr@10 : 0.8133    map@10 : 0.5498
+Test result:
+ndcg@10 : 0.5751    recall@10 : 0.0732    precision@10 : 0.5394    hit@10 : 0.8717    itemcoverage@10 : 0.1318    mrr@10 : 0.7511    map@10 : 0.485
+
+embedding_size:64, hidden_size_list:[32,32], learning_rate:0.0008169722880945813, message_dropout:0.09401459625894122, node_dropout:0.11406130678390211, reg_weight:0.03716088527832572
+Valid result:
+ndcg@10 : 0.772    recall@10 : 0.119    precision@10 : 0.7474    hit@10 : 0.947    itemcoverage@10 : 0.1115    mrr@10 : 0.886    map@10 : 0.7085
+Test result:
+ndcg@10 : 0.7059    recall@10 : 0.111    precision@10 : 0.6773    hit@10 : 0.9184    itemcoverage@10 : 0.1274    mrr@10 : 0.8419    map@10 : 0.6379
+
+embedding_size:64, hidden_size_list:[128,128,128], learning_rate:0.032671502391657066, message_dropout:0.019847511818415875, node_dropout:0.1793374661588053, reg_weight:0.0678099792934576
+Valid result:
+ndcg@10 : 0.7784    recall@10 : 0.1183    precision@10 : 0.7507    hit@10 : 0.9371    itemcoverage@10 : 0.1876    mrr@10 : 0.8947    map@10 : 0.7199
+Test result:
+ndcg@10 : 0.6944    recall@10 : 0.105    precision@10 : 0.6612    hit@10 : 0.8805    itemcoverage@10 : 0.196    mrr@10 : 0.8231    map@10 : 0.6355
+
+embedding_size:64, hidden_size_list:[64,64,64], learning_rate:0.000670027134604672, message_dropout:0.2425220838114743, node_dropout:0.06841884635411151, reg_weight:0.001100706494513374
+Valid result:
+ndcg@10 : 0.7527    recall@10 : 0.1162    precision@10 : 0.7308    hit@10 : 0.9503    itemcoverage@10 : 0.1105    mrr@10 : 0.8776    map@10 : 0.6821
+Test result:
+ndcg@10 : 0.6862    recall@10 : 0.1023    precision@10 : 0.6569    hit@10 : 0.9067    itemcoverage@10 : 0.1292    mrr@10 : 0.8366    map@10 : 0.6136
+
+embedding_size:128, hidden_size_list:[64,64,64], learning_rate:0.011799743382516409, message_dropout:0.005580066472286893, node_dropout:0.0778271891757757, reg_weight:0.0004993184359189166
+Valid result:
+ndcg@10 : 0.8389    recall@10 : 0.1414    precision@10 : 0.8172    hit@10 : 0.957    itemcoverage@10 : 0.197    mrr@10 : 0.9153    map@10 : 0.8001
+Test result:
+ndcg@10 : 0.7511    recall@10 : 0.1208    precision@10 : 0.728    hit@10 : 0.9184    itemcoverage@10 : 0.1997    mrr@10 : 0.8505    map@10 : 0.7035
+
+embedding_size:128, hidden_size_list:[32,32], learning_rate:0.019523246068748234, message_dropout:0.04441876108456942, node_dropout:0.13320521747317965, reg_weight:0.0012242133226604195
+Valid result:
+ndcg@10 : 0.8327    recall@10 : 0.1348    precision@10 : 0.8073    hit@10 : 0.9404    itemcoverage@10 : 0.1929    mrr@10 : 0.9191    map@10 : 0.7936
+Test result:
+ndcg@10 : 0.7573    recall@10 : 0.1268    precision@10 : 0.7283    hit@10 : 0.9213    itemcoverage@10 : 0.2001    mrr@10 : 0.8596    map@10 : 0.7105
+
+embedding_size:64, hidden_size_list:[128,128,128], learning_rate:0.05593566096259976, message_dropout:0.07633115349234117, node_dropout:0.027106437888781254, reg_weight:0.025661636293375867
+Valid result:
+ndcg@10 : 0.7433    recall@10 : 0.1126    precision@10 : 0.7142    hit@10 : 0.9437    itemcoverage@10 : 0.1623    mrr@10 : 0.8732    map@10 : 0.6711
+Test result:
+ndcg@10 : 0.6752    recall@10 : 0.0974    precision@10 : 0.644    hit@10 : 0.9155    itemcoverage@10 : 0.1697    mrr@10 : 0.8233    map@10 : 0.5994
+
+embedding_size:64, hidden_size_list:[128,128,128], learning_rate:0.32103073283656813, message_dropout:0.00111063365591475, node_dropout:0.21261608533802917, reg_weight:0.0007290033441775378
+Valid result:
+ndcg@10 : 0.6001    recall@10 : 0.0726    precision@10 : 0.553    hit@10 : 0.9007    itemcoverage@10 : 0.1273    mrr@10 : 0.8226    map@10 : 0.4997
+Test result:
+ndcg@10 : 0.5377    recall@10 : 0.0608    precision@10 : 0.4991    hit@10 : 0.8367    itemcoverage@10 : 0.1297    mrr@10 : 0.7344    map@10 : 0.4441
+

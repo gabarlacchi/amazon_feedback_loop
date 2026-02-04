@@ -1,0 +1,10 @@
+model: SGL
+
+learning_rate loguniform -8,-1
+embedding_size choice [32,64,128]
+n_layers uniform 1,5
+reg_weight loguniform -8,-1
+ssl_tau uniform 0.1,0.5
+ssl_weight uniform 0.01,0.2
+drop_ratio uniform 0.05,0.3
+type choice ['ND','ED','RW']

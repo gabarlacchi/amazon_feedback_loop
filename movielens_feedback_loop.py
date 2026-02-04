@@ -38,42 +38,7 @@ from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, 
 from amazonecommerce_dataset import AmazonECommerceDataset
 from choice_model import ChoiceModel
 
-os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-
-class DeviceDataLoaderWrapper:
-    """Wrapper to ensure all batch tensors are moved to the correct device."""
-    
-    def __init__(self, dataloader, device):
-        self.dataloader = dataloader
-        self.device = device
-        # Preserve all original attributes
-        for attr in ['dataset', 'batch_size', 'pr', 'shuffle', 'step', 
-                     'model', 'dl_type', 'sampler']:
-            if hasattr(dataloader, attr):
-                setattr(self, attr, getattr(dataloader, attr))
-    
-    def __iter__(self):
-        for batch in self.dataloader:
-            # Move all tensors in the interaction dictionary to the target device
-            if hasattr(batch, 'interaction') and isinstance(batch.interaction, dict):
-                # Create a new dict with moved tensors instead of modifying in place
-                moved_interaction = {}
-                for key, value in batch.interaction.items():
-                    if isinstance(value, torch.Tensor) and value.device != self.device:
-                        moved_interaction[key] = value.to(self.device)
-                    else:
-                        moved_interaction[key] = value
-                batch.interaction = moved_interaction
-            yield batch
-    
-    def __len__(self):
-        return len(self.dataloader)
-    
-    def __getattr__(self, name):
-        # Delegate any other attribute access to the original dataloader
-        return getattr(self.dataloader, name)
-
-class LastFMFeedbackLoop():
+class MovieLensFeedbackLoop():
     def __init__(self, config: DotDict, initialization_dataset: AmazonECommerceDataset, **kwargs):
 
         self.master_seed = int(getattr(config, "seed", 42))
@@ -100,6 +65,7 @@ class LastFMFeedbackLoop():
 
         self.unrolled_dataset_path = initialization_dataset.unrolled_dataset_total_path
         self.distribution_timeline_path = initialization_dataset.distribution_timeline_path
+        self.user_rating_probs_path = f"./cache/user_rating_probs_{self.initialization_dataset.y1}-{self.initialization_dataset.y2}_movielens.csv"
 
         # Define work folder, to remove at the end of the simulation
         self.tmp_folder =f"./{self.config.recbole_folder}"
@@ -116,6 +82,108 @@ class LastFMFeedbackLoop():
 
         self.usr_strategy_ranking = {}
 
+    def init_experiment(self) -> None:
+        # Set up unrolled dataset original with columns based on the item id chosen
+        df_dataset_total = self.initialization_dataset.unrolled_dataset_total
+        df_dataset_total['date'] = (
+            pd.to_datetime(df_dataset_total['date'], utc=True)
+            .dt.date
+        )
+        df_dataset_total['date'] = pd.to_datetime(df_dataset_total['date'], format="%Y-%m-%d")
+        df_dataset_total['timestamp'] = df_dataset_total.date.values.astype(np.int64) // 10 ** 9
+        
+        # Get the first available date 
+        self.cold_start_start_date = df_dataset_total['date'].min().date()
+        self.cold_start_end_date = self.cold_start_start_date + relativedelta(months=self.config.cold_start_months) - relativedelta(days=1)
+
+        self.cold_start_start_datetime = datetime(self.cold_start_start_date.year, self.cold_start_start_date.month, self.cold_start_start_date.day)
+        self.cold_start_end_datetime = datetime(self.cold_start_end_date.year, self.cold_start_end_date.month, self.cold_start_end_date.day)
+
+        start_date = datetime(self.initialization_dataset.y1, 1, 1)
+        end_date = start_date + relativedelta(months=self.config.cold_start_months) - relativedelta(days=1)
+
+        self.dataset_unrolled_cold_start = df_dataset_total[(df_dataset_total['date'].dt.date >= start_date.date()) & (df_dataset_total['date'].dt.date <= end_date.date())]
+        
+        # Select users that interacted at least once per month for every year
+        self.users_ids = get_consistent_users(df=df_dataset_total, user_col="user_id", min_months_per_year=1)
+        sampled_users = pd.Series(self.users_ids)
+        self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[self.dataset_unrolled_cold_start['user_id'].isin(sampled_users)]
+
+        # Too many interactions, reduce for each user when there's big number
+
+        self.start_experiment_date = self.cold_start_end_date + timedelta(days=1)
+
+        # Reomve users with less than 10 interactions in the initializatio phase
+        user_counts = self.dataset_unrolled_cold_start["user_id"].value_counts()
+        active_users = user_counts[user_counts >= 10].index
+        self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[self.dataset_unrolled_cold_start["user_id"].isin(active_users)]
+
+        item_counts = self.dataset_unrolled_cold_start["item_id"].value_counts()
+        active_items = item_counts[item_counts >= 10].index
+        self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[self.dataset_unrolled_cold_start["item_id"].isin(active_items)]
+
+        self.users_ids = self.dataset_unrolled_cold_start.user_id.unique().tolist()
+        self.items_ids = self.dataset_unrolled_cold_start.item_id.unique().tolist()
+
+        # Filter the features too
+        self.features_dataset_unrolled_cold_start = self.initialization_dataset.df_movies
+        self.features_dataset_unrolled_cold_start = self.features_dataset_unrolled_cold_start[self.features_dataset_unrolled_cold_start["item_id"].isin(self.items_ids)]
+
+        print(f"\n Initialization of the experiment. \n The number of users partecipating at the simulation is: {len(self.users_ids)}. \n The number of items partecipaing at the simulation is: {len(self.items_ids)}. \n")
+        # If use_cahe=False or no cache files exist, these functions will take time
+        self.compute_user_rating_probs(df=self.dataset_unrolled_cold_start)
+        self.initialization_dataset.real_dataset_save_cache(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
+        self.experiment_distribution_dict = self.initialization_dataset.strategy_simulation_info(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
+    
+    def compute_user_rating_probs(self, df: pd.DataFrame) -> None:
+        if self.config.use_cache or not os.path.exists(self.user_rating_probs_path):
+            # During the simulation, once the item is selected from a user, the rating is generated using its own distribution
+            RATINGS = np.array([1.0, 2.0, 3.0, 4.0, 5.0], dtype=np.float32)
+            ALPHA = 10.0
+
+            required_cols = {"user_id", "rating"}
+            missing = required_cols - set(df.columns)
+            if missing:
+                raise ValueError(f"Missing required columns: {missing}")
+            
+            df = df[["user_id", "rating"]].copy()
+            df["rating"] = df["rating"].astype(np.float32)
+
+            user_counts = (
+                df.groupby("user_id")["rating"]
+                .value_counts()
+                .unstack(fill_value=0)
+                .reindex(columns=RATINGS, fill_value=0)
+            )
+
+            global_counts = (
+                df["rating"]
+                .value_counts()
+                .reindex(RATINGS, fill_value=0)
+                .to_numpy(dtype=np.float32)
+            )
+
+            global_probs = global_counts / global_counts.sum()
+
+            counts_np = user_counts.to_numpy(dtype=np.float32)
+            row_sums = counts_np.sum(axis=1, keepdims=True)
+
+            smoothed_probs = (counts_np + ALPHA * global_probs) / (row_sums + ALPHA)
+
+            user_ids = user_counts.index.to_numpy()
+            user_probs = {
+                user_id: smoothed_probs[i]
+                for i, user_id in enumerate(user_ids)
+            }
+
+            payload = {
+                "user_probs": user_probs,
+                "global_probs": global_probs,
+                "ratings": RATINGS
+            }
+
+            with open(self.user_rating_probs_path, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
     @staticmethod
     def _handle_cold_start_users(train_df, val_df, test_df):
         '''
@@ -186,8 +254,8 @@ class LastFMFeedbackLoop():
         return unrolled
     
     def tuning_hyperparameters(self) -> None:
-        hyper_file = f"tuning_parameters_lastfm/{self.model_name_config}.hyper"
-        export_result_file = f"tuning_parameters_lastfm/{self.model_name_config}.result"
+        hyper_file = f"tuning_parameters_movielens/{self.model_name_config}.hyper"
+        export_result_file = f"tuning_parameters_movielens/{self.model_name_config}.result"
         if self.model_name_config in ["Collective Random", "Collective Popularity"]:
             return None
         if os.path.exists(export_result_file):
@@ -250,64 +318,135 @@ class LastFMFeedbackLoop():
 
         self.parameter_dict.update(hp.best_params)
         return None
+
+    def _fit_with_tracking(self, trainer: Trainer, save_stem: str, show_progress: bool = False, save_plots: bool = False):
+        all_validation_results = []
+        all_test_results = []
+        all_train_losses = []
+
+        # ---- store originals ----
+        original_valid_epoch = trainer._valid_epoch
+        original_train_epoch = trainer._train_epoch
+
+        # ---- wrappers ----
+        def custom_train_epoch(train_data, epoch_idx, loss_func=None, show_progress=False):
+            train_loss = original_train_epoch(train_data, epoch_idx, loss_func, show_progress)
+            all_train_losses.append(train_loss)
+            return train_loss
+
+        def custom_valid_epoch(valid_data, show_progress=False):
+            valid_result = original_valid_epoch(valid_data, show_progress)
+            all_validation_results.append(valid_result)
+            # evaluate on test data every validation
+            test_result = trainer.evaluate(self.test_data, load_best_model=False, show_progress=False)
+            all_test_results.append(test_result)
+            return valid_result
+
+        # ---- patch ----
+        trainer._train_epoch = custom_train_epoch
+        trainer._valid_epoch = custom_valid_epoch
+
+        # ---- fit ----
+        best_valid_result = trainer.fit(
+            train_data=self.train_data,
+            valid_data=self.valid_data,
+            show_progress=show_progress,
+            saved=False
+        )
+
+        # ---- assemble dataframes ----
+        data_for_df = []
+        max_epochs = max(len(all_train_losses), len(all_validation_results), len(all_test_results))
+        for epoch in range(max_epochs):
+            row = {"epoch": epoch}
+            if epoch < len(all_train_losses):
+                row["train_loss"] = all_train_losses[epoch]
+            if epoch < len(all_validation_results):
+                valid_data = all_validation_results[epoch]
+                if isinstance(valid_data, dict):
+                    for k, v in valid_data.items():
+                        row[f"valid_{k}"] = v
+                elif isinstance(valid_data, tuple):
+                    if len(valid_data) >= 2 and isinstance(valid_data[1], dict):
+                        for k, v in valid_data[1].items():
+                            row[f"valid_{k}"] = v
+                    elif len(valid_data) >= 1:
+                        row["valid_score"] = valid_data[0]
+            if epoch < len(all_test_results):
+                for k, v in all_test_results[epoch].items():
+                    row[f"test_{k}"] = v
+            data_for_df.append(row)
+
+        results_df = pd.DataFrame(data_for_df).set_index("epoch")
+        val_cols = [c for c in results_df.columns if c.startswith("valid_")]
+        test_cols = [c for c in results_df.columns if c.startswith("test_")]
+        validation_df = results_df[val_cols].rename(columns=lambda c: c.replace("valid_", ""))
+        test_df = results_df[test_cols].rename(columns=lambda c: c.replace("test_", ""))
+        loss_df = results_df[["train_loss"]].copy() if "train_loss" in results_df.columns else pd.DataFrame()
+
+        # ---- save CSVs ----
+        base = save_stem  # e.g., ".../train_logs/sim_epoch_3"
+        os.makedirs(os.path.dirname(base), exist_ok=True)
+        if not loss_df.empty:
+            loss_df.to_csv(f"{base}_loss.csv")
+        if not validation_df.empty:
+            validation_df.to_csv(f"{base}_validation.csv")
+        if not test_df.empty:
+            test_df.to_csv(f"{base}_test.csv")
+
+        # ---- save final test metrics JSON (last epoch of this training run) ----
+        final_test_metrics = all_test_results[-1] if all_test_results else {}
+        metrics_to_save = ["Precision", "Recall", "Hit", "NDCG", "ItemCoverage", "MRR", "MAP", "AveragePopularity"]
+        out_json = {}
+        for metric_name in metrics_to_save:
+            found = {}
+            for k, v in final_test_metrics.items():
+                if metric_name.lower() in k.lower():
+                    found[k] = v
+            out_json[metric_name] = found or None
+        out_json["model_name"] = self.model_name_config
+        out_json["dataset"] = "amazon"
+        out_json["total_epochs"] = len(all_test_results)
+        out_json["final_epoch"] = len(all_test_results) - 1
+        with open(f"{base}_final_test_metrics.json", "w") as f:
+            json.dump(out_json, f, indent=2, default=str)
+
+    def evaluate_initial_model(self, save_dir: str = None, show_progress: bool = False):
+
+        if not hasattr(self, 'recbole_model') or not hasattr(self, 'train_data'):
+            raise RuntimeError("Model must be initialized first. Call init_recbole_model(is_first_init=True)")
+        
+        # Set up save directory
+        save_stem = os.path.join(save_dir, "epoch_0")
+        
+        # Create trainer
+        trainer = Trainer(self.model_config, self.recbole_model)
+        
+        self.logger.info("[Epoch 0] Starting initial model training and evaluation")
+        self._fit_with_tracking(
+            trainer=trainer,
+            save_stem=save_stem,
+            show_progress=show_progress,
+            save_plots=False
+        )
+        
+        # Load the final test metrics that were saved
+        metrics_file = f"{save_stem}_final_test_metrics.json"
+        if os.path.exists(metrics_file):
+            with open(metrics_file, 'r') as f:
+                final_metrics = json.load(f)
+            self.logger.info(f"[Epoch 0] Initial evaluation complete. Metrics saved to {metrics_file}")
+            return final_metrics
+        else:
+            self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
+            return None
     
     def init_choice_model(self) -> None:
         df_init = self.dataset_unrolled_cold_start.copy()
-        # print(df_init[df_init.item_id == "172ca31d-5966-46ef-838e-75891849576f"])
 
-        # exit()
-        self.user_choice_model = ChoiceModel(interaction_df=df_init, config=self.config)
+        self.user_choice_model = ChoiceModel(interaction_df=df_init, config=self.config, rating_col = "rating")
         self.user_choice_model.setup()
 
-    def init_experiment(self) -> None:
-        # Set up unrolled dataset original with columns based on the item id chosen
-        df_dataset_total = self.initialization_dataset.unrolled_dataset_total
-        df_dataset_total['date'] = (
-            pd.to_datetime(df_dataset_total['date'], utc=True)
-            .dt.date
-        )
-        df_dataset_total['date'] = pd.to_datetime(df_dataset_total['date'], format="%Y-%m-%d")
-        df_dataset_total['timestamp'] = df_dataset_total.date.values.astype(np.int64) // 10 ** 9
-        
-        # Get the first available date 
-        self.cold_start_start_date = df_dataset_total['date'].min().date()
-        self.cold_start_end_date = self.cold_start_start_date + relativedelta(months=self.config.cold_start_months) - relativedelta(days=1)
-
-        self.cold_start_start_datetime = datetime(self.cold_start_start_date.year, self.cold_start_start_date.month, self.cold_start_start_date.day)
-        self.cold_start_end_datetime = datetime(self.cold_start_end_date.year, self.cold_start_end_date.month, self.cold_start_end_date.day)
-
-        start_date = datetime(self.initialization_dataset.y1, 1, 1)
-        end_date = start_date + relativedelta(months=self.config.cold_start_months) - relativedelta(days=1)
-
-        self.dataset_unrolled_cold_start = df_dataset_total[(df_dataset_total['date'].dt.date >= start_date.date()) & (df_dataset_total['date'].dt.date <= end_date.date())]
-        
-        # Select users that interacted at least once per month for every year
-        # self.users_ids = get_consistent_users(df=df_dataset_total, user_col="user_id", min_months_per_year=1)
-        # sampled_users = pd.Series(self.users_ids)
-        # self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[self.dataset_unrolled_cold_start['user_id'].isin(sampled_users)]
-
-        # Too many interactions, reduce for each user when there's big number
-
-
-        self.start_experiment_date = self.cold_start_end_date + timedelta(days=1)
-
-        # Reomve users with less than 10 interactions in the initializatio phase
-        user_counts = self.dataset_unrolled_cold_start["user_id"].value_counts()
-        active_users = user_counts[user_counts >= 10].index
-        self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[self.dataset_unrolled_cold_start["user_id"].isin(active_users)]
-
-        item_counts = self.dataset_unrolled_cold_start["item_id"].value_counts()
-        active_items = item_counts[item_counts >= 10].index
-        self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[self.dataset_unrolled_cold_start["item_id"].isin(active_items)]
-
-        self.users_ids = self.dataset_unrolled_cold_start.user_id.unique().tolist()
-        self.items_ids = self.dataset_unrolled_cold_start.item_id.unique().tolist()
-
-        print(f"\n Initialization of the experiment. \n The number of users partecipating at the simulation is: {len(self.users_ids)}. \n The number of items partecipaing at the simulation is: {len(self.items_ids)}. \n")
-        # If use_cahe=False or no cache files exist, these functions will take time
-        self.initialization_dataset.real_dataset_save_cache(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
-        self.experiment_distribution_dict = self.initialization_dataset.strategy_simulation_info(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
-    
     def _build_window_for_epoch(self, k: int = 0, new_interactions = None):
         # FIRST INITIALIZATION OF THE DATASET
         if k == 0:
@@ -323,73 +462,49 @@ class LastFMFeedbackLoop():
                 print("Permission denied")
             except OSError as e:
                 print(f"Error deleting folder: {e}")
-            # Create empty
+            # R create empty
             if not os.path.exists(self.tmp_folder):
                 os.makedirs(self.tmp_folder)
             if not os.path.exists(os.path.join(self.tmp_folder, self.tmp_dataset_folder)):
                 os.makedirs(os.path.join(self.tmp_folder, self.tmp_dataset_folder))
 
-            df = self.dataset_unrolled_cold_start.copy()
+            df_interactions = self.dataset_unrolled_cold_start.copy()
+            df_features = self.features_dataset_unrolled_cold_start
 
-            # Features pre-processing for Last.fm
-            # Gender: clean and standardize
-            df["gender"] = df.get("gender").astype(str).str.strip().str.lower()
-            df.loc[~df["gender"].isin(["m", "f"]), "gender"] = "unknown"
-            
-            # Age: handle missing values and outliers
-            df["age"] = pd.to_numeric(df.get("age"), errors='coerce')
-            df.loc[(df["age"] < 10) | (df["age"] > 100), "age"] = np.nan
-            df["age"] = df["age"].fillna(df["age"].median())
-            
-            # Country: clean and handle missing
-            df["country"] = df.get("country").astype(str).str.strip().str.title()
-            df.loc[df["country"].isin(["", "Nan", "None"]), "country"] = "Unknown"
+            df_interactions = df_interactions.loc[df_interactions["user_id"].isin(self.users_ids)
+                        & df_interactions["item_id"].isin(self.items_ids)].copy()
 
-            df = df.loc[df["user_id"].isin(self.users_ids) & df["item_id"].isin(self.items_ids)].copy()
+            item_feats = (
+                df_features.drop_duplicates("item_id", keep="last")
+                .loc[:, ["item_id", "title", "genres", "tags"]]
+            )
 
-            categorical_cols = ["user_id", "item_id", "gender", "country"]
+            item_feats = item_feats.rename(columns={
+                "item_id": "item_id:token",
+                "title": "title:token_seq",
+                "genres": "genres:token_seq",
+                "tags": "tags:token_seq",
+            })
 
-            for col in categorical_cols:
-                if col in df.columns:
-                    df[col] = df[col].astype('category')
+            item_feats.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.item"), index=False, sep='\t') 
 
-            # User features
             user_feats = (
-                df.sort_values("date")
+                df_interactions.sort_values("date")
                 .drop_duplicates("user_id", keep="last")
-                .loc[:, ["user_id", "gender", "age", "country"]]
+                .loc[:, ["user_id"]]
             )
             user_feats = user_feats[user_feats["user_id"].isin(self.users_ids)]
 
-            user_df = user_feats.rename(columns={
+            user_feats = user_feats.rename(columns={
                 "user_id": "user_id:token",
-                "gender": "gender:token",
-                "age": "age:float",
-                "country": "country:token",
             })
 
-            user_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), 
-                        index=False, sep='\t')
+            user_feats.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.user"), index=False, sep='\t') 
 
-            # Item features (artist level)
-            item_feats = (
-                df.sort_values("date")
-                .drop_duplicates("item_id", keep="last")
-                .loc[:, ["item_id"]]
-            )
-            item_feats = item_feats[item_feats["item_id"].isin(self.items_ids)]
+            self.user_cols_recbole = [c.split(":")[0] for c in user_feats.columns] 
+            self.item_cols_recbole = [c.split(":")[0] for c in item_feats.columns]
 
-            item_df = item_feats.rename(columns={
-                "item_id": "item_id:token",
-            })
-
-            item_df.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, f"experiment_dataset.item"), 
-                        index=False, sep='\t') 
-
-            self.user_cols_recbole = [c.split(":")[0] for c in user_df.columns] 
-            self.item_cols_recbole = [c.split(":")[0] for c in item_df.columns]
-
-            working_df = self.dataset_unrolled_cold_start.copy()
+            working_df = df_interactions.copy()
 
             working_df["user_id"] = working_df["user_id"].astype('category')
             working_df["item_id"] = working_df["item_id"].astype('category')
@@ -420,30 +535,49 @@ class LastFMFeedbackLoop():
             grouped_counts = grp.size().rename(columns={"size": "interaction_count"})
             grouped_dates = grp["date"].first().reset_index()
             grouped_dates = grouped_dates.rename(columns={"date": "date"})
+
+            grouped_ratings = grp["rating"].first().reset_index()
+            grouped_ratings = grouped_ratings.rename(columns={"rating": "rating"})
+
             grouped = grouped_counts.merge(
                 grouped_dates,
                 on=["user_id", "item_id", "timestamp"],
                 how="inner",
+            ).merge(
+                grouped_ratings,
+                on=["user_id", "item_id", "timestamp"],
+                how="inner",
             )
-            grouped["label"] = 1.0
+
+            grouped["label"] = (grouped["rating"] >= 3.0).astype(float)
 
             cols = [
                 "user_id:token", "item_id:token", "timestamp:float",
-                "label:float", "interaction_count:float", "date"
+                "label:float", "date"
             ]
 
             grouped = grouped.rename(columns={
                 "user_id": "user_id:token",
                 "item_id": "item_id:token",
                 "timestamp": "timestamp:float",
-                "label": "label:float",
-                "interaction_count": "interaction_count:float",
+                "label": "label:float"
             })
 
             # Masks
             train_mask = grouped["date"].between(train_start, train_end, inclusive="both")
             val_mask = grouped["date"].between(val_start, val_end, inclusive="both")
             test_mask = grouped["date"].between(test_start, test_end, inclusive="both")
+
+            cols = [
+                "user_id:token", "item_id:token", "timestamp:float",
+                "label:float", "date"
+            ]
+            grouped = grouped.rename(columns={
+                "user_id": "user_id:token",
+                "item_id": "item_id:token",
+                "timestamp": "timestamp:float",
+                "label": "label:float"
+            })
 
             # Split frames
             self.working_train_df = grouped.loc[train_mask, cols].sort_values(["user_id:token", "timestamp:float"])
@@ -460,57 +594,21 @@ class LastFMFeedbackLoop():
             print(f"\n Val dates: {self.working_val_df.date.min()} - {self.working_val_df.date.max()} \n")
             print(f"\n Test dates: {self.working_test_df.date.min()} - {self.working_test_df.date.max()} \n")
 
-            expanded_train = self._unroll_by_interaction_count(
-                df=self.working_train_df.drop(columns=["date"])
-            )
-            expanded_val = self._unroll_by_interaction_count(
-                df=self.working_val_df.drop(columns=["date"])
-            )
-            expanded_test = self._unroll_by_interaction_count(
-                df=self.working_test_df.drop(columns=["date"])
-            )
-
-            all_items_from_file = set(item_df["item_id:token"].astype(str))
-            all_items_in_interactions = set(
-                pd.concat([
-                    expanded_train["item_id:token"], 
-                    expanded_val["item_id:token"], 
-                    expanded_test["item_id:token"]
-                ]).astype(str).unique()
-            )
-
-            cold_start_items = all_items_from_file - all_items_in_interactions
-            if cold_start_items:
-                print(f"⚠️  Found {len(cold_start_items)} cold-start items without interactions")
-
-                dummy_user = expanded_train["user_id:token"].iloc[0]
-                dummy_timestamp = expanded_train["timestamp:float"].min()
-
-                dummy_rows = []
-                for item_id in cold_start_items:
-                    dummy_rows.append({
-                        "user_id:token": dummy_user,
-                        "item_id:token": item_id,
-                        "timestamp:float": dummy_timestamp,
-                        "label:float": 0.0,  # Negative label (no actual interaction)
-                        "interaction_count:float": 1.0
-                    })
-                
-                dummy_df = pd.DataFrame(dummy_rows)
-
-                expanded_train = pd.concat([dummy_df, expanded_train], ignore_index=True)
-                expanded_train = expanded_train.sort_values(["user_id:token", "timestamp:float"])
-
-            expanded_train.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
+            self.working_train_df.drop(columns=["date"]).to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
                                 index=False, sep="\t")
-            expanded_val.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
+            self.working_val_df.drop(columns=["date"]).to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
                                 index=False, sep="\t")
-            expanded_test.to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
+            self.working_test_df.drop(columns=["date"]).to_csv(os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
                                 index=False, sep="\t")
             
-            self._cached_historical_df = pd.concat([expanded_train, expanded_val, expanded_test], ignore_index=True)
+            self._cached_historical_df = pd.concat([self.working_train_df, self.working_val_df, self.working_test_df], ignore_index=True)
 
         else:
+
+            # # When tested, apply to the initialization block too
+            DATASET_TYPE = "explicit"  # "implicit" or "explicit"
+            EXPLICIT_THRESHOLD = 3.0
+
             filtered_interactions = [
                 inter for inter in new_interactions 
                 if inter["user_id"] in self.users_ids and inter["item_id"] in self.items_ids
@@ -519,27 +617,31 @@ class LastFMFeedbackLoop():
                 print(f"Warning: No valid interactions after filtering at epoch {k}")
                 return
 
-            # Create new interactions DataFrame efficiently
+            # Create new interactions DataFrame
             df_new_inter = pd.DataFrame(filtered_interactions)
-            df_new_inter = df_new_inter[["user_id", "item_id", "timestamp"]].rename(columns={
+            df_new_inter = df_new_inter[["user_id", "item_id", "rating", "timestamp"]].rename(columns={
                 "user_id": "user_id:token",
                 "item_id": "item_id:token", 
+                "rating": "rating:float",
                 "timestamp": "timestamp:float"
             })
-            df_new_inter["label:float"] = 1.0
-            df_new_inter["interaction_count:float"] = 1.0
 
             if not hasattr(self, '_cached_historical_df'):
                 raise Exception("Historical data not initialized. Run with k=0 first.")
-            
-            # print(self._cached_historical_df)
-            # print(self._cached_historical_df[self._cached_historical_df["item_id:token"] == "SPLASH_POOL"])
-            # exit()
-            # Concatenate once
+
+            # # Concatenate with historical data
             working_df = pd.concat([self._cached_historical_df, df_new_inter], ignore_index=True)
 
-            # if "date" not in working_df.columns:
-            #     working_df["date"] = pd.to_datetime(working_df["timestamp:float"], unit="s").dt.date
+            working_df["label:float"] = working_df.get("label:float", np.nan)
+            if "rating:float" in working_df.columns:
+                mask_has_rating = working_df["rating:float"].notna()
+                working_df.loc[mask_has_rating, "label:float"] = (
+                    working_df.loc[mask_has_rating, "rating:float"] >= EXPLICIT_THRESHOLD
+                ).astype(float)
+            else:
+                print(f"\n Rating column not found! \n")
+
+            working_df["label:float"] = working_df["label:float"].fillna(0.0).astype(float)
 
             working_df["date"] = (
                 pd.to_datetime(working_df["timestamp:float"], unit="s", utc=True)
@@ -551,11 +653,6 @@ class LastFMFeedbackLoop():
             # Get sorted unique months
             months = np.sort(working_df["month"].unique())
 
-            
-
-            # !!
-            # Retrainig with all the available data but at most last max_months_to_keep months, then slice window
-            # Alway stay with the the initialization perdio data
             max_months_to_keep = 12
             init_months = months[:self.config.cold_start_months]
 
@@ -592,10 +689,6 @@ class LastFMFeedbackLoop():
             val_month = months[val_idx]
             test_month = months[test_idx]
 
-            working_df["interaction_count:float"] = working_df.groupby(
-                ["user_id:token", "item_id:token", "timestamp:float"]
-            )["month"].transform("count").astype(float)
-
             working_df = working_df.drop_duplicates(
                 subset=["user_id:token", "item_id:token", "timestamp:float"]
             )
@@ -607,7 +700,7 @@ class LastFMFeedbackLoop():
             test_mask = working_df["month"] == test_month
 
             # Select columns needed for RecBole
-            cols = ["user_id:token", "item_id:token", "timestamp:float", "label:float", "interaction_count:float"]
+            cols = ["user_id:token", "item_id:token", "timestamp:float", "label:float"]
 
             # Create splits
             train_data = working_df[train_mask][cols].copy()
@@ -633,48 +726,35 @@ class LastFMFeedbackLoop():
                 self.working_test_df
             )
 
-            expanded_train = self._unroll_by_interaction_count(
-                df=self.working_train_df
-            )
-            expanded_val = self._unroll_by_interaction_count(
-                df=self.working_val_df
-            )
-            expanded_test = self._unroll_by_interaction_count(
-                df=self.working_test_df
-            )
-            
-            if "date" in expanded_train.columns:
-                expanded_train = expanded_train.drop(columns=["date"])
-            if "date" in expanded_val.columns:
-                expanded_val = expanded_val.drop(columns=["date"])
-            if "date" in expanded_test.columns:
-                expanded_test = expanded_test.drop(columns=["date"])
+            if "date" in self.working_train_df.columns:
+                self.working_train_df = self.working_train_df.drop(columns=["date"])
+            if "date" in self.working_val_df.columns:
+                self.working_val_df = self.working_val_df.drop(columns=["date"])
+            if "date" in self.working_test_df.columns:
+                self.working_test_df = self.working_test_df.drop(columns=["date"])
 
-            expanded_train.to_csv(
+            self.working_train_df.to_csv(
                 os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.train.inter"),
                 index=False, 
                 sep="\t"
             )
-            expanded_val.to_csv(
+            self.working_val_df.to_csv(
                 os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.val.inter"),
                 index=False, 
                 sep="\t"
             )
-            expanded_test.to_csv(
+            self.working_test_df.to_csv(
                 os.path.join(self.tmp_folder, self.tmp_dataset_folder, "experiment_dataset.test.inter"),
                 index=False, 
                 sep="\t"
             )
 
-            all_expanded = pd.concat([expanded_train, expanded_val, expanded_test], ignore_index=True)
+            all_expanded = pd.concat([self.working_train_df, self.working_val_df, self.working_test_df], ignore_index=True)
             
             self._cached_historical_df = all_expanded[cols].copy()
 
     def init_recbole_model(self, is_first_init=False, warm_start=True, results_path=None):
 
-        if not os.environ.get('CUBLAS_WORKSPACE_CONFIG'):
-            os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-            
         # Some models need custom implemention, add here
         CUSTOM_MODELS = {
             "NeuMF",
@@ -733,7 +813,7 @@ class LastFMFeedbackLoop():
                 raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
 
             CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "NFM"}
-            # needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
+            needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
             # !!
             needs_features = True
 
@@ -743,8 +823,8 @@ class LastFMFeedbackLoop():
             #     base_inter_cols.append("interaction_count")
             
             if needs_features:
-                user_cols = ["user_id", "age", "country", "gender"]
-                item_cols = ["item_id"]
+                user_cols = ["user_id"]
+                item_cols = ["item_id", "price", "category_seq", "publisher", "language"]
 
             else:
                 user_cols = None
@@ -943,12 +1023,6 @@ class LastFMFeedbackLoop():
             # !! Roughly initiated
             evaluate_initial = True
 
-            device = self.model_config["device"]
-    
-            # self.train_data = DeviceDataLoaderWrapper(self.train_data, device)
-            # self.valid_data = DeviceDataLoaderWrapper(self.valid_data, device)
-            # self.test_data = DeviceDataLoaderWrapper(self.test_data, device)
-            
             if evaluate_initial:
                 self.logger.info("[Epoch 0] Evaluating initial model before simulation")
                 initial_metrics = self.evaluate_initial_model(show_progress=False, save_dir=results_path)
@@ -997,144 +1071,6 @@ class LastFMFeedbackLoop():
                     self.model_config, 
                     self.train_data.dataset
                 ).to(self.model_config["device"])
-
-    def _fit_with_tracking(self, trainer: Trainer, save_stem: str, show_progress: bool = False, save_plots: bool = False):
-
-        from recbole.config import Config
-        device = self.model_config["device"]
-
-        # Check what device RecBole is using - assure it is consistent
-        print(f"\n RecBole device: {self.model_config['device']} \n")
-        print(f"\n cuda available: {torch.cuda.is_available()} \n")
-        if not torch.cuda.is_available():
-            trainer.device = torch.device('cpu')
-        # self.recbole_model = self.recbole_model.to(device)
-        # for name, param in self.recbole_model.named_parameters():
-        #     if param.device != device:
-        #         print(f"Warning: Parameter {name} on {param.device}, moving to {device}")
-        #         param.data = param.data.to(device)
-
-        all_validation_results = []
-        all_test_results = []
-        all_train_losses = []
-
-        # ---- store originals ----
-        original_valid_epoch = trainer._valid_epoch
-        original_train_epoch = trainer._train_epoch
-
-        # ---- wrappers ----
-        def custom_train_epoch(train_data, epoch_idx, loss_func=None, show_progress=False):
-            train_loss = original_train_epoch(train_data, epoch_idx, loss_func, show_progress)
-            all_train_losses.append(train_loss)
-            return train_loss
-
-        def custom_valid_epoch(valid_data, show_progress=False):
-            valid_result = original_valid_epoch(valid_data, show_progress)
-            all_validation_results.append(valid_result)
-            # evaluate on test data every validation
-            test_result = trainer.evaluate(self.test_data, load_best_model=False, show_progress=False)
-            all_test_results.append(test_result)
-            return valid_result
-
-
-        # ---- patch ----
-        trainer._train_epoch = custom_train_epoch
-        trainer._valid_epoch = custom_valid_epoch
-
-        # ---- fit ----
-        best_valid_result = trainer.fit(
-            train_data=self.train_data,
-            valid_data=self.valid_data,
-            show_progress=show_progress,
-            saved=False
-        )
-
-        # ---- assemble dataframes ----
-        data_for_df = []
-        max_epochs = max(len(all_train_losses), len(all_validation_results), len(all_test_results))
-        for epoch in range(max_epochs):
-            row = {"epoch": epoch}
-            if epoch < len(all_train_losses):
-                row["train_loss"] = all_train_losses[epoch]
-            if epoch < len(all_validation_results):
-                valid_data = all_validation_results[epoch]
-                if isinstance(valid_data, dict):
-                    for k, v in valid_data.items():
-                        row[f"valid_{k}"] = v
-                elif isinstance(valid_data, tuple):
-                    if len(valid_data) >= 2 and isinstance(valid_data[1], dict):
-                        for k, v in valid_data[1].items():
-                            row[f"valid_{k}"] = v
-                    elif len(valid_data) >= 1:
-                        row["valid_score"] = valid_data[0]
-            if epoch < len(all_test_results):
-                for k, v in all_test_results[epoch].items():
-                    row[f"test_{k}"] = v
-            data_for_df.append(row)
-
-        results_df = pd.DataFrame(data_for_df).set_index("epoch")
-        val_cols = [c for c in results_df.columns if c.startswith("valid_")]
-        test_cols = [c for c in results_df.columns if c.startswith("test_")]
-        validation_df = results_df[val_cols].rename(columns=lambda c: c.replace("valid_", ""))
-        test_df = results_df[test_cols].rename(columns=lambda c: c.replace("test_", ""))
-        loss_df = results_df[["train_loss"]].copy() if "train_loss" in results_df.columns else pd.DataFrame()
-
-        # ---- save CSVs ----
-        base = save_stem  # e.g., ".../train_logs/sim_epoch_3"
-        os.makedirs(os.path.dirname(base), exist_ok=True)
-        if not loss_df.empty:
-            loss_df.to_csv(f"{base}_loss.csv")
-        if not validation_df.empty:
-            validation_df.to_csv(f"{base}_validation.csv")
-        if not test_df.empty:
-            test_df.to_csv(f"{base}_test.csv")
-
-        # ---- save final test metrics JSON (last epoch of this training run) ----
-        final_test_metrics = all_test_results[-1] if all_test_results else {}
-        metrics_to_save = ["Precision", "Recall", "Hit", "NDCG", "ItemCoverage", "MRR", "MAP", "AveragePopularity"]
-        out_json = {}
-        for metric_name in metrics_to_save:
-            found = {}
-            for k, v in final_test_metrics.items():
-                if metric_name.lower() in k.lower():
-                    found[k] = v
-            out_json[metric_name] = found or None
-        out_json["model_name"] = self.model_name_config
-        out_json["dataset"] = "amazon"
-        out_json["total_epochs"] = len(all_test_results)
-        out_json["final_epoch"] = len(all_test_results) - 1
-        with open(f"{base}_final_test_metrics.json", "w") as f:
-            json.dump(out_json, f, indent=2, default=str)
-
-    def evaluate_initial_model(self, save_dir: str = None, show_progress: bool = False):
-
-        if not hasattr(self, 'recbole_model') or not hasattr(self, 'train_data'):
-            raise RuntimeError("Model must be initialized first. Call init_recbole_model(is_first_init=True)")
-        
-        # Set up save directory
-        save_stem = os.path.join(save_dir, "epoch_0")
-        
-        # Create trainer
-        trainer = Trainer(self.model_config, self.recbole_model)
-
-        self.logger.info("[Epoch 0] Starting initial model training and evaluation")
-        self._fit_with_tracking(
-            trainer=trainer,
-            save_stem=save_stem,
-            show_progress=show_progress,
-            save_plots=False
-        )
-        
-        # Load the final test metrics that were saved
-        metrics_file = f"{save_stem}_final_test_metrics.json"
-        if os.path.exists(metrics_file):
-            with open(metrics_file, 'r') as f:
-                final_metrics = json.load(f)
-            self.logger.info(f"[Epoch 0] Initial evaluation complete. Metrics saved to {metrics_file}")
-            return final_metrics
-        else:
-            self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
-            return None
 
     def recom_recbole_model(self, curr_epoch: str, user_id_recbole: int, K_horizon: int = None):
         '''
@@ -1230,7 +1166,7 @@ class LastFMFeedbackLoop():
             return selected
         except Exception as e:
             traceback.print_exc()
-
+    
     def recom_choice_model(self, curr_epoch: int, user_id_recbole: int) -> list:
         tau = self.config.user_strategy["tau"]
         recbole_dataset = self.recbole_dataset
@@ -1241,18 +1177,19 @@ class LastFMFeedbackLoop():
         probs = probs / probs.sum()
         sampled_index = int(self.rng.choice(len(items), p=probs))
         selected_item_id = items[sampled_index]
-        try:
-            item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, selected_item_id)
-        except:
-            cs = self.user_choice_model.candidate_sets[user_id]
-            print(cs)
-            print(type(cs))
-            print(cs[cs == str(selected_item_id)])
-            raise
 
+        item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, str(selected_item_id))
         return item_id_recbole
     
     def run_feedback_loop(self, p: float|str, results_path: str, results_scores_path: str, k_horizon: int):
+        # Get users probability distribution of rating assignements
+        with open(self.user_rating_probs_path, "rb") as f:
+            payload = pickle.load(f)
+        
+        user_probs = payload["user_probs"] 
+        global_probs = payload["global_probs"]
+        RATINGS = payload["ratings"].astype(np.float32)
+
         if self.config.delta_training_epoch > self.config.epochs:
             raise Exception(f"Delta training epoch must be lower than epochs")
     
@@ -1297,13 +1234,13 @@ class LastFMFeedbackLoop():
                     if len(valid_items) == 0:
                         continue
                     basket_size = len(valid_items)
+                    user_id_recbole = self.recbole_dataset.token2id(self.recbole_dataset.uid_field, str(user))
 
-                    user_id_recbole = self.recbole_dataset.token2id(self.recbole_dataset.uid_field, user)
                     use_recommender_mask = (self.rng.random(basket_size) < p)
                     
                     n_recommender = np.sum(use_recommender_mask)
                     n_choice = basket_size - n_recommender
-
+                    
                     recommender_items = []
                     if n_recommender > 0:
                         for _ in range(n_recommender):
@@ -1337,11 +1274,18 @@ class LastFMFeedbackLoop():
                         if is_bad_item_id(our_item_id):
                             print(f"\n Bad token item ID. Found: {int(recbole_item_id) if hasattr(recbole_item_id, '__int__') else recbole_item_id} of type: {type(our_item_id).__name__}")
                             continue
-                    
+                        
+                        # Get from pre-computed distribution of each user
+                        if user not in user_probs:
+                            print("\n !!! User not in user_probs distribution rating !!! \n")
+                            probabilities = global_probs
+                        else:
+                            probabilities = user_probs[user]
                         
                         single_interaction_df = {
                             "user_id": user,
                             "item_id": our_item_id,
+                            "rating": self.rng.choice(RATINGS, p=probabilities),
                             "date": date,
                             "timestamp": recbole_timestamp,
                         }
@@ -1473,6 +1417,8 @@ class LastFMFeedbackLoop():
 
             epoch_interactions_df = pd.DataFrame(epochs_interactions_df)
             epoch_interactions_df.to_csv(os.path.join(results_path, f"epoch_{epoch}.csv"))
+
+            # !!
 
             with open(os.path.join(results_scores_path, f"top_k_scores_epoch_{epoch}.pkl"), "wb") as f:
                 pickle.dump(self.top_k_users_scores, f, protocol=pickle.HIGHEST_PROTOCOL)
