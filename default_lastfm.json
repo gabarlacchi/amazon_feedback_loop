@@ -6,24 +6,19 @@
     "time_window": "2006-2012",
     "experiment_mode": "p-validation",
     "n_reps": 1,
-    "use_cache": true,
+    "use_cache": false,
     "recommender_model": {
-        "model_name": "NeuMF",
+        "model_name": "FM",
         "epochs": 25,
-        "dropout_prob": 0.2,
-        "learning_rate": 0.004,
-        "mlp_hidden_size": [
-            64,
-            32,
-            16
-        ]
+        "learning_rate": 0.0001,
+        "embedding_size": 16
     },
     "user_strategy": {
         "model_name": "Custom choice model",
         "epochs": 1,
         "tau": null,
         "candidate_set": {
-            "size": 50,
+            "size": 100,
             "p_global": 0.40,
             "p_user": 0.40,
             "p_random": 0.20

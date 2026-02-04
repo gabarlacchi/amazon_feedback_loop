@@ -180,8 +180,6 @@ class AmazonBooksDataset:
             self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path, index_col=0)
             # self.user_rating_distributions = pd.read_csv(self.users_rating_distribution_path, index_col=0)
             # self.global_rating_distribution = pd.read_csv(self.global_fallback_rating_distribution_path, index_col=0)
-        
-
 
     def user_rating_distribution(self):
         if "rating" in self.unrolled_dataset_total.columns:

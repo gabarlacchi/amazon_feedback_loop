@@ -196,13 +196,14 @@ def main(args: argparse):
                     feedback_loop_tool._build_window_for_epoch(k=0, new_interactions=None)
 
                     # Traing and set up RecBole system
-                    feedback_loop_tool.init_recbole_model(is_first_init=True, warm_start=True)
+                    feedback_loop_tool.init_recbole_model(is_first_init=True, warm_start=True, results_path=os.path.join(rep_dir, "dataframe"))
 
                     # Tune parameters of the selected model
                     # NOTE that it does not set up the found parameters. They are to be defined in the json config
                     # A file will be output with the results
                     _ = feedback_loop_tool.tuning_hyperparameters()
 
+                    exit()
                     if usrstrategy_model_name == "Custom choice model":
                         feedback_loop_tool.init_choice_model()
                         feedback_loop_tool.user_choice_model.results_path = choice_dir
@@ -400,10 +401,10 @@ def main(args: argparse):
                 f"-p=probability-Kitems=KITEMS_coldStart={config.cold_start_months}"
             )
 
-            # ps = [1, 0.8, 0.5, 0.2, 0.0]
-            # ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
-            ps = [0.0, 0.2, 0.5, 0.8, 1.0]
-            ps_names = [f"{usrstrategy_model_name}", "P=0.2", "P=0.5", "P=0.8", f"{model_name}"]
+            ps = [1, 0.8, 0.5, 0.2, 0.0]
+            ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
+            # ps = [0.0, 0.2, 0.5, 0.8, 1.0]
+            # ps_names = [f"{usrstrategy_model_name}", "P=0.2", "P=0.5", "P=0.8", f"{model_name}"]
             k_av_items = config.k_items
 
             n_reps = getattr(config, "n_reps", 3)

@@ -1238,17 +1238,12 @@ class LastFMFeedbackLoop():
                         continue
                     basket_size = len(valid_items)
 
-                    # !!
-                    # if basket_size > 15:
-                    #     basket_size = 15
-
                     user_id_recbole = self.recbole_dataset.token2id(self.recbole_dataset.uid_field, user)
-
                     use_recommender_mask = (self.rng.random(basket_size) < p)
                     
                     n_recommender = np.sum(use_recommender_mask)
                     n_choice = basket_size - n_recommender
-                    
+
                     recommender_items = []
                     if n_recommender > 0:
                         for _ in range(n_recommender):
@@ -1418,8 +1413,6 @@ class LastFMFeedbackLoop():
 
             epoch_interactions_df = pd.DataFrame(epochs_interactions_df)
             epoch_interactions_df.to_csv(os.path.join(results_path, f"epoch_{epoch}.csv"))
-
-            # !!
 
             with open(os.path.join(results_scores_path, f"top_k_scores_epoch_{epoch}.pkl"), "wb") as f:
                 pickle.dump(self.top_k_users_scores, f, protocol=pickle.HIGHEST_PROTOCOL)
