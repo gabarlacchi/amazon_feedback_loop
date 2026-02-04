@@ -384,42 +384,6 @@ class ChoiceModel():
         self.candidate_sets = candidate_sets
         self.utilities_users = utilities_users
 
-        # PLOTS
-        # Utilities over population
-        # utilities_users = self._compute_utilities_implicit(df=df, candidate_sets=candidate_sets)
-        # df = self.utilities_users
-
-        # figsize = (20, 15)
-        # dpi = 200
-
-        # np.random.seed(5)
-        # random_users = np.random.choice(df.columns, size=10, replace=False)
-
-        # for user in random_users:
-        #     user_utilities = df[user].dropna()
-            
-        #     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-        #     sns.histplot(user_utilities, bins=30, kde=True, ax=ax)
-            
-        #     ax.set_xlabel(r'Utility', fontsize=45, color="#000000")
-        #     ax.set_ylabel(r'Number of items', fontsize=45, color="#000000")
-        #     ax.grid(True, linestyle='--', alpha=0.7)
-        #     ax.tick_params(axis='both', which='major', labelsize=45, colors="#000000")
-        #     ax.set_facecolor('#FFFFFF')
-            
-        #     # Remove "0" from y-axis ticks
-        #     yticks = ax.get_yticks()
-        #     yticks = [yt for yt in yticks if yt != 0]
-        #     ax.set_yticks(yticks)
-            
-        #     # Remove x-axis ticks
-        #     ax.set_xticks([])
-            
-        #     fig.savefig(f"utilities_distr_user={user}_epoch=0.png")
-        #     plt.close(fig)
-
-        # exit()
-
     def predict_for_a_user(self, user_id, tau=None):
         if tau is None:
             # tau = self.exploration_rate_users[self.exploration_rate_users[self.user_col]==user_id].exploration_score.values[0]
@@ -445,31 +409,6 @@ class ChoiceModel():
         exp_util = np.exp(logits - np.max(logits))
         probs = exp_util / exp_util.sum()
 
-        # PLOT score ranking variation respect to tau
-        # candidate_set_size = self.config.user_strategy["candidate_set"]["size"]
-        # sorted_probs = probs.sort_values(ascending=True)
-
-        # sorted_probs.plot(kind='bar', ax=ax, color='skyblue', alpha=0.6)
-        # # sorted_probs.plot(kind='kde', ax=ax, color='skyblue', linewidth=3)
-        # # sorted_probs.plot(ax=ax, color='skyblue')
-
-        # ax.set_ylabel("Choice Probability", fontsize=25, color="#000000")
-        # ax.set_xlabel("Item ID", fontsize=25, color="#000000")
-        # # ax.set_xticklabels(sorted_probs.index, rotation=45)
-        # ax.set_xticks([])
-        # ax.set_xticklabels([])
-
-        # ax.grid(True, linestyle='-')
-        # # legend = ax.legend(fontsize=20, facecolor='#FFFFFF')
-        # # legend.get_frame().set_edgecolor('#046865')
-        # for spine in ax.spines.values():
-        #     spine.set_color('#000000')
-        # ax.tick_params(axis='both', labelsize=18, colors="#000000")
-
-        # fig.savefig(f"User={user_id}_tau={tau}.png")
-        # plt.close()
-
-        # exit()
         item_ids = probs.index.to_list()
         probs_arr = probs.values
         return item_ids, probs_arr
@@ -508,43 +447,8 @@ class ChoiceModel():
         # )
 
         utilities_users = self.compute_utilities(df=self.df, candidate_sets=candidate_sets, rating_col="rating" if self.feedback_type=="explicit" else None)
-        # target_folder = os.path.join(self.results_path, "utilities_users")
-        # os.makedirs(target_folder, exist_ok=True)
-        # utilities_users.to_csv(
-        #     os.path.join(target_folder, f"epoch_{epoch}.csv"), 
-        #     index=False
-        # )
 
         self.candidate_sets = candidate_sets
         self.utilities_users = utilities_users
 
-        # new_df = pd.DataFrame(new_interactions)
-        # new_df[self.time_col] = pd.to_datetime(new_df[self.time_col])
-        # new_df['year_month'] = new_df[self.time_col].dt.to_period('M')
         
-        # new_df = new_df[["user_id", "item_id", "date", "timestamp"]]
-        # df = pd.concat([self.df, new_df], ignore_index=True)
-        # df = df.sort_values(self.time_col).reset_index(drop=True)
-
-        # self.df = df # The main is updated with new interactions
-
-        # if self.results_path is None:
-        #     raise Exception(f"The choice model has no access to results folder")
-
-        # # Candidate set items
-        # candidate_sets = self.candidate_set_items(df=self.df)
-        # target_folder = os.path.join(self.results_path, "candidate_set_items")
-        # if not os.path.exists(target_folder):
-        #     os.makedirs(target_folder)
-        # candidate_sets.to_csv(os.path.join(target_folder, f"epoch_{epoch}.csv"), index=False)
-
-        # # Utilities
-        # utilities_users = self._compute_utilities_implicit(df=self.df, candidate_sets=candidate_sets)
-        # target_folder = os.path.join(self.results_path, "utilities_users")
-        # if not os.path.exists(target_folder):
-        #     os.makedirs(target_folder)
-        # utilities_users.to_csv(os.path.join(target_folder, f"epoch_{epoch}.csv"), index=False)
-
-        # # self.exploration_rate_users = results
-        # self.candidate_sets = candidate_sets
-        # self.utilities_users = utilities_users

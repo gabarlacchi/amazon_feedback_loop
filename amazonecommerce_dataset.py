@@ -49,6 +49,7 @@ class AmazonECommerceDataset:
     def setup(self)-> None:
         if not self.config.use_cache or not os.path.exists(self.unrolled_dataset_total_path):
             df_dataset = pd.read_csv(os.path.join(self.dataset_root_path, self.dataset_filename), sep=",", low_memory=False)
+            
             df_features = pd.read_csv(os.path.join(self.dataset_root_path, self.dataset_features_filename), sep=",", low_memory=False)
             df_features = df_features[
                 [

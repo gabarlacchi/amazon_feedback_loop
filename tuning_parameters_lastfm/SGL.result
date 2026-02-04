@@ -1,0 +1,54 @@
+drop_ratio:0.0643164951827022, embedding_size:32, learning_rate:0.0020091120819898715, n_layers:4.407344433447834, reg_weight:0.34140111654682953, ssl_tau:0.10994042517179375, ssl_weight:0.09214371045134336, type:ED
+Valid result:
+ndcg@10 : 0.7661    recall@10 : 0.1203    precision@10 : 0.7331    hit@10 : 0.9007    itemcoverage@10 : 0.1238    mrr@10 : 0.8791    map@10 : 0.7097
+Test result:
+ndcg@10 : 0.6645    recall@10 : 0.0995    precision@10 : 0.6338    hit@10 : 0.8017    itemcoverage@10 : 0.1279    mrr@10 : 0.7695    map@10 : 0.6135
+
+drop_ratio:0.23543195913351822, embedding_size:128, learning_rate:0.03275425669384673, n_layers:2.470517059560401, reg_weight:0.0018346572343913023, ssl_tau:0.3641761821527373, ssl_weight:0.10485371743444438, type:ED
+Valid result:
+ndcg@10 : 0.8313    recall@10 : 0.1436    precision@10 : 0.8089    hit@10 : 0.9205    itemcoverage@10 : 0.2076    mrr@10 : 0.8942    map@10 : 0.8018
+Test result:
+ndcg@10 : 0.7234    recall@10 : 0.12    precision@10 : 0.7    hit@10 : 0.8309    itemcoverage@10 : 0.2054    mrr@10 : 0.8007    map@10 : 0.6908
+
+drop_ratio:0.18806798252000095, embedding_size:64, learning_rate:0.004549561414326897, n_layers:2.2304621810277676, reg_weight:0.000818590116298305, ssl_tau:0.23164638367450543, ssl_weight:0.158586706745866, type:ED
+Valid result:
+ndcg@10 : 0.8063    recall@10 : 0.1351    precision@10 : 0.7854    hit@10 : 0.894    itemcoverage@10 : 0.1794    mrr@10 : 0.8743    map@10 : 0.7725
+Test result:
+ndcg@10 : 0.7009    recall@10 : 0.1169    precision@10 : 0.6813    hit@10 : 0.8047    itemcoverage@10 : 0.1795    mrr@10 : 0.7693    map@10 : 0.6704
+
+drop_ratio:0.18283274696412932, embedding_size:32, learning_rate:0.0004197395860070835, n_layers:3.9358998198652264, reg_weight:0.017713472563546936, ssl_tau:0.257016625768735, ssl_weight:0.15586169489106208, type:RW
+Valid result:
+ndcg@10 : 0.6668    recall@10 : 0.0932    precision@10 : 0.6427    hit@10 : 0.7848    itemcoverage@10 : 0.1247    mrr@10 : 0.7534    map@10 : 0.6183
+Test result:
+ndcg@10 : 0.5827    recall@10 : 0.0826    precision@10 : 0.5595    hit@10 : 0.7026    itemcoverage@10 : 0.1243    mrr@10 : 0.6709    map@10 : 0.5361
+
+drop_ratio:0.1406979285736087, embedding_size:32, learning_rate:0.04281790524424866, n_layers:1.1968404035148703, reg_weight:0.012051384513212141, ssl_tau:0.26349626453519204, ssl_weight:0.1943877710924732, type:ED
+Valid result:
+ndcg@10 : 0.6669    recall@10 : 0.0936    precision@10 : 0.6377    hit@10 : 0.8675    itemcoverage@10 : 0.1517    mrr@10 : 0.7959    map@10 : 0.5905
+Test result:
+ndcg@10 : 0.5839    recall@10 : 0.0799    precision@10 : 0.5586    hit@10 : 0.7551    itemcoverage@10 : 0.1501    mrr@10 : 0.6947    map@10 : 0.5198
+
+drop_ratio:0.1175225082444246, embedding_size:32, learning_rate:0.01740052105157382, n_layers:2.345716699469283, reg_weight:0.039008683782312835, ssl_tau:0.3058504965476053, ssl_weight:0.042685778220733106, type:ED
+Valid result:
+ndcg@10 : 0.7544    recall@10 : 0.1147    precision@10 : 0.7298    hit@10 : 0.8874    itemcoverage@10 : 0.1504    mrr@10 : 0.855    map@10 : 0.6983
+Test result:
+ndcg@10 : 0.6594    recall@10 : 0.104    precision@10 : 0.6327    hit@10 : 0.7872    itemcoverage@10 : 0.1472    mrr@10 : 0.7506    map@10 : 0.6099
+
+drop_ratio:0.20435995625746795, embedding_size:32, learning_rate:0.003484798881310788, n_layers:2.7750660537846468, reg_weight:0.0003388317248397395, ssl_tau:0.15885735086876906, ssl_weight:0.1703190241280973, type:RW
+Valid result:
+ndcg@10 : 0.7458    recall@10 : 0.1136    precision@10 : 0.7166    hit@10 : 0.8576    itemcoverage@10 : 0.1473    mrr@10 : 0.8435    map@10 : 0.6964
+Test result:
+ndcg@10 : 0.6495    recall@10 : 0.1    precision@10 : 0.6207    hit@10 : 0.7638    itemcoverage@10 : 0.146    mrr@10 : 0.744    map@10 : 0.6061
+
+drop_ratio:0.17714540776493953, embedding_size:128, learning_rate:0.002382498011900473, n_layers:3.1795715513816436, reg_weight:0.0017364369139800764, ssl_tau:0.49369570854971245, ssl_weight:0.15616410289246682, type:ND
+Valid result:
+ndcg@10 : 0.7929    recall@10 : 0.1304    precision@10 : 0.7752    hit@10 : 0.8874    itemcoverage@10 : 0.1845    mrr@10 : 0.8549    map@10 : 0.7586
+Test result:
+ndcg@10 : 0.6914    recall@10 : 0.1119    precision@10 : 0.6703    hit@10 : 0.7843    itemcoverage@10 : 0.1807    mrr@10 : 0.7601    map@10 : 0.6595
+
+drop_ratio:0.09603131856090842, embedding_size:64, learning_rate:0.15309538952685003, n_layers:1.331596595532027, reg_weight:0.014121882469994098, ssl_tau:0.2996999766629277, ssl_weight:0.10507548708071228, type:RW
+Valid result:
+ndcg@10 : 0.7863    recall@10 : 0.127    precision@10 : 0.7619    hit@10 : 0.9205    itemcoverage@10 : 0.1737    mrr@10 : 0.8758    map@10 : 0.7383
+Test result:
+ndcg@10 : 0.6841    recall@10 : 0.1133    precision@10 : 0.6624    hit@10 : 0.8367    itemcoverage@10 : 0.1762    mrr@10 : 0.7695    map@10 : 0.6369
+

@@ -8,10 +8,21 @@
     "n_reps": 1,
     "use_cache": true,
     "recommender_model": {
-        "model_name": "CF_KNN_item",
-        "epochs": 1,
-        "k": 100,
-        "shrink": 0.0
+        "model_name": "DCNV2",
+        "epochs": 25,
+        "learning_rate": 0.008,
+        "mlp_hidden_size": [
+            768,
+            768
+        ],
+        "dropout_prob": 0.1,
+        "reg_weight": 0.0005,
+        "mixed": false,
+        "structure": "stacked",
+        "cross_layer_num": 3,
+        "expert_num": 3,
+        "low_rank": 128,
+        "embedding_size": 16
     },
     "user_strategy": {
         "model_name": "Custom choice model",

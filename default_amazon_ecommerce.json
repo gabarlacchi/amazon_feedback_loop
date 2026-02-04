@@ -6,10 +6,10 @@
     "time_window": "2018-2022",
     "experiment_mode": "p-validation",
     "n_reps": 1,
-    "use_cache": true,
+    "use_cache": false,
     "recommender_model": {
         "model_name": "MultiVAE",
-        "epochs": 25,
+        "epochs": 1,
         "learning_rate": 0.01,
         "dropout_prob": 0.16,
         "latent_dimension": 256,
@@ -23,7 +23,7 @@
         "epochs": 1,
         "tau": null,
         "candidate_set": {
-            "size": 50,
+            "size": 10,
             "p_global": 0.40,
             "p_user": 0.40,
             "p_random": 0.20

@@ -38,6 +38,40 @@ from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, 
 from amazonecommerce_dataset import AmazonECommerceDataset
 from choice_model import ChoiceModel
 
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+
+class DeviceDataLoaderWrapper:
+    """Wrapper to ensure all batch tensors are moved to the correct device."""
+    
+    def __init__(self, dataloader, device):
+        self.dataloader = dataloader
+        self.device = device
+        # Preserve all original attributes
+        for attr in ['dataset', 'batch_size', 'pr', 'shuffle', 'step', 
+                     'model', 'dl_type', 'sampler']:
+            if hasattr(dataloader, attr):
+                setattr(self, attr, getattr(dataloader, attr))
+    
+    def __iter__(self):
+        for batch in self.dataloader:
+            # Move all tensors in the interaction dictionary to the target device
+            if hasattr(batch, 'interaction') and isinstance(batch.interaction, dict):
+                # Create a new dict with moved tensors instead of modifying in place
+                moved_interaction = {}
+                for key, value in batch.interaction.items():
+                    if isinstance(value, torch.Tensor) and value.device != self.device:
+                        moved_interaction[key] = value.to(self.device)
+                    else:
+                        moved_interaction[key] = value
+                batch.interaction = moved_interaction
+            yield batch
+    
+    def __len__(self):
+        return len(self.dataloader)
+    
+    def __getattr__(self, name):
+        # Delegate any other attribute access to the original dataloader
+        return getattr(self.dataloader, name)
 
 class LastFMFeedbackLoop():
     def __init__(self, config: DotDict, initialization_dataset: AmazonECommerceDataset, **kwargs):
@@ -638,6 +672,9 @@ class LastFMFeedbackLoop():
 
     def init_recbole_model(self, is_first_init=False, warm_start=True, results_path=None):
 
+        if not os.environ.get('CUBLAS_WORKSPACE_CONFIG'):
+            os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+            
         # Some models need custom implemention, add here
         CUSTOM_MODELS = {
             "NeuMF",
@@ -696,7 +733,7 @@ class LastFMFeedbackLoop():
                 raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
 
             CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "NFM"}
-            needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
+            # needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
             # !!
             needs_features = True
 
@@ -906,6 +943,12 @@ class LastFMFeedbackLoop():
             # !! Roughly initiated
             evaluate_initial = True
 
+            device = self.model_config["device"]
+    
+            # self.train_data = DeviceDataLoaderWrapper(self.train_data, device)
+            # self.valid_data = DeviceDataLoaderWrapper(self.valid_data, device)
+            # self.test_data = DeviceDataLoaderWrapper(self.test_data, device)
+            
             if evaluate_initial:
                 self.logger.info("[Epoch 0] Evaluating initial model before simulation")
                 initial_metrics = self.evaluate_initial_model(show_progress=False, save_dir=results_path)
@@ -958,12 +1001,18 @@ class LastFMFeedbackLoop():
     def _fit_with_tracking(self, trainer: Trainer, save_stem: str, show_progress: bool = False, save_plots: bool = False):
 
         from recbole.config import Config
+        device = self.model_config["device"]
 
-        # Check what device RecBole is using
+        # Check what device RecBole is using - assure it is consistent
         print(f"\n RecBole device: {self.model_config['device']} \n")
         print(f"\n cuda available: {torch.cuda.is_available()} \n")
         if not torch.cuda.is_available():
             trainer.device = torch.device('cpu')
+        # self.recbole_model = self.recbole_model.to(device)
+        # for name, param in self.recbole_model.named_parameters():
+        #     if param.device != device:
+        #         print(f"Warning: Parameter {name} on {param.device}, moving to {device}")
+        #         param.data = param.data.to(device)
 
         all_validation_results = []
         all_test_results = []

@@ -548,7 +548,6 @@ class FM(ContextRecommender):
 
     @torch.no_grad()
     def full_sort_predict(self, interaction):
-
         device = interaction[self.USER_ID].device
         batch_size = interaction[self.USER_ID].size(0)
         n_items = self.n_items
@@ -818,29 +817,38 @@ class DCNV2(ContextRecommender):
     
     @torch.no_grad()
     def full_sort_predict(self, interaction):
-        """
-        Full sort prediction for ranking all items.
-        
-        Args:
-            interaction: User interaction with user features
-        Returns:
-            scores: [batch_size, n_items] or [n_items] if batch_size=1
-        """
-        device = interaction[self.USER_ID].device
+        # Use model device (authoritative)
+        device = self.device
+
+        # Move incoming interaction to device
+        if hasattr(interaction, "to"):
+            interaction = interaction.to(device)
+        elif isinstance(interaction, dict):
+            interaction = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in interaction.items()
+            }
+
+        # Join user features FIRST (join often returns CPU tensors!)
+        interaction = self.dataset.join(interaction)
+
+        # CRITICAL: move joined interaction back to device
+        if hasattr(interaction, "to"):
+            interaction = interaction.to(device)
+        elif isinstance(interaction, dict):
+            interaction = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in interaction.items()
+            }
+
         batch_size = interaction[self.USER_ID].size(0)
         n_items = self.n_items
-        
-        # Join user features FIRST
-        interaction = self.dataset.join(interaction)
-        
-        # Update batch_size after join
-        batch_size = interaction[self.USER_ID].size(0)
-        
+
         # Expand for all items
         item_ids = torch.arange(n_items, device=device).unsqueeze(0).repeat(batch_size, 1)
         item_ids_flat = item_ids.reshape(-1)
-        
-        # Create new interaction with all user-item pairs
+
+        # Build repeated user/context features
         new_inter_dict = {}
         for key in interaction.interaction:
             if key == self.ITEM_ID:
@@ -848,30 +856,27 @@ class DCNV2(ContextRecommender):
             v = interaction[key]
             reps = [n_items] + [1] * (v.dim() - 1)
             new_inter_dict[key] = v.repeat(*reps).reshape(batch_size * n_items, *v.shape[1:])
-        
-        # Add item IDs
-        if self.ITEM_ID in interaction.interaction:
-            dtype = interaction[self.ITEM_ID].dtype
-        else:
-            dtype = torch.long
-        
+
+        # Add item IDs with correct dtype
+        dtype = interaction[self.ITEM_ID].dtype if self.ITEM_ID in interaction.interaction else torch.long
         new_inter_dict[self.ITEM_ID] = item_ids_flat.to(dtype=dtype)
+
         full_inter = Interaction(new_inter_dict).to(device)
-        
+
         # Join item features
         full_inter = self.dataset.join(full_inter)
-        
+
+        # CRITICAL: move joined full_inter back to device
+        full_inter = full_inter.to(device)
+
         # Forward pass
         logits_flat = self.forward(full_inter)
         scores_flat = self.sigmoid(logits_flat)
-        
-        # Reshape to [batch_size, n_items]
+
+        # Reshape
         scores = scores_flat.view(batch_size, n_items)
-        
-        # If single user, squeeze batch dimension
         if batch_size == 1:
             scores = scores.squeeze(0)
-        
         return scores
 
 class DeepFM(ContextRecommender):
@@ -934,6 +939,7 @@ class DeepFM(ContextRecommender):
     
     def forward(self, interaction):
         # [batch_size, num_field, embed_dim]
+
         fm_all_embeddings = self.concat_embed_input_fields(interaction)
         batch_size = fm_all_embeddings.size(0)
         
@@ -973,12 +979,31 @@ class DeepFM(ContextRecommender):
     
     @torch.no_grad()
     def full_sort_predict(self, interaction):
-        device = interaction[self.USER_ID].device
+        # Ensure interaction is on correct device from the start
+        device = self.device  # Use model's device
+        
+        if hasattr(interaction, 'to'):
+            interaction = interaction.to(device)
+        elif isinstance(interaction, dict):
+            interaction = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in interaction.items()
+            }
+        
         batch_size = interaction[self.USER_ID].size(0)
         n_items = self.n_items
         
         # Join user features FIRST
         interaction = self.dataset.join(interaction)
+        
+        # CRITICAL FIX: Move joined interaction back to device
+        if hasattr(interaction, 'to'):
+            interaction = interaction.to(device)
+        elif isinstance(interaction, dict):
+            interaction = {
+                k: v.to(device) if isinstance(v, torch.Tensor) else v
+                for k, v in interaction.items()
+            }
         
         # Update batch_size after join
         batch_size = interaction[self.USER_ID].size(0)
@@ -1005,6 +1030,9 @@ class DeepFM(ContextRecommender):
         
         # Join item features
         full_inter = self.dataset.join(full_inter)
+        
+        # CRITICAL FIX: Move joined full_inter back to device
+        full_inter = full_inter.to(device)
         
         # Forward pass
         logits_flat = self.forward(full_inter)
