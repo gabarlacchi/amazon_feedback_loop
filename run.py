@@ -59,6 +59,11 @@ def main(args: argparse):
                 f"_candidate_set_size={config.user_strategy.candidate_set.size}"
                 f"-p=probability-Kitems=KITEMS_coldStart={config.cold_start_months}"
             )
+            if config.delta_training_epoch > 1:
+                fld_name += f"_deltaTrain={config.delta_training_epoch}"
+            # With no final part like this is the default version, which is 40-40-20
+            if [0.40, 0.40, 0.20] != [config.user_strategy.candidate_set.p_global, config.user_strategy.candidate_set.p_user, config.user_strategy.candidate_set.p_random]:
+                fld_name += f"_global={config.user_strategy.candidate_set.p_global}_individual={config.user_strategy.candidate_set.p_user}_unkown={config.user_strategy.candidate_set.p_random}"
 
             ps = [1, 0.8, 0.5, 0.2, 0.0]
             ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
@@ -456,6 +461,7 @@ def main(args: argparse):
                     # Tune parameters of the selected model
                     # NOTE that it does not set up the found parameters. They are to be defined in the json config
                     # A file will be output with the results
+                    exit()
                     _ = feedback_loop_tool.tuning_hyperparameters()
 
                     if usrstrategy_model_name == "Custom choice model":
@@ -464,6 +470,8 @@ def main(args: argparse):
                     else:
                         raise Exception("\n Choice model not implemented yet or not recognized \n")
                     
+                    
+
                     model_metrics = feedback_loop_tool.run_feedback_loop(
                         p=p, 
                         results_path=os.path.join(rep_dir, "dataframe"),

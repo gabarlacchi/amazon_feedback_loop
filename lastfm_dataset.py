@@ -52,13 +52,6 @@ class LastFMDataset:
                 on_bad_lines='skip'
             )
 
-            print(list(df.columns))
-
-            print(f"\n - Number of users: {df['user_id'].nunique():,}")
-            print(f" - Number of tracks: {df['track_id'].nunique():,}")
-            print(f" - Number of artists: {df['artist_id'].nunique():,}")
-
-            exit()
             df['date'] = pd.to_datetime(df['timestamp'])
             df = df.dropna()
             df = df[df['date'].dt.year.between(self.y1, self.y2)]

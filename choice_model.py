@@ -47,9 +47,14 @@ class ChoiceModel():
 
         self.cache_root = "./cache/choice_model"
 
+        candidate_set_settings = self.config.user_strategy.candidate_set
+        p_global = candidate_set_settings.p_global
+        p_user = candidate_set_settings.p_user
+        p_random = candidate_set_settings.p_random
+        
         candidate_size = self.config.user_strategy.candidate_set.size
         self.tau_users_cache_path = f"exploration_score_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS.csv"
-        self.candidate_set_users_path = f"candidate_set_items_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS_size={candidate_size}.csv"
+        self.candidate_set_users_path = f"candidate_set_items_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS_size={candidate_size}_global={p_global}_individual={p_user}_unkown={p_random}.csv"
         self.utilities_users_path = f"utilities_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS.csv"
         
     def compute_gini(self, array):

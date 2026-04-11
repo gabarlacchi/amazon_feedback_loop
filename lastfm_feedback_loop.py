@@ -269,6 +269,8 @@ class LastFMFeedbackLoop():
         self.items_ids = self.dataset_unrolled_cold_start.item_id.unique().tolist()
 
         print(f"\n Initialization of the experiment. \n The number of users partecipating at the simulation is: {len(self.users_ids)}. \n The number of items partecipaing at the simulation is: {len(self.items_ids)}. \n")
+        exit()
+        
         # If use_cahe=False or no cache files exist, these functions will take time
         self.initialization_dataset.real_dataset_save_cache(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)
         self.experiment_distribution_dict = self.initialization_dataset.strategy_simulation_info(start_date=self.start_experiment_date, end_date=self.last_avialable_date, users=self.users_ids, items=self.items_ids)

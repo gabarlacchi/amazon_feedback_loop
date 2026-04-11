@@ -8,22 +8,16 @@
     "n_reps": 1,
     "use_cache": true,
     "recommender_model": {
-        "model_name": "NeuMF",
+        "model_name": "BPR",
         "epochs": 25,
-        "dropout_prob": 0.2,
-        "learning_rate": 0.004,
-        "mlp_hidden_size": [
-            64,
-            32,
-            16
-        ]
+        "learning_rate": 0.001
     },
     "user_strategy": {
         "model_name": "Custom choice model",
         "epochs": 1,
-        "tau": null,
+        "tau": 1000,
         "candidate_set": {
-            "size": 100,
+            "size": 50,
             "p_global": 0.40,
             "p_user": 0.40,
             "p_random": 0.20
