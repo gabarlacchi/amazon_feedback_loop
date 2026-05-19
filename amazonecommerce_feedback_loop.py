@@ -447,6 +447,7 @@ class AmazonECommerceFeedbackLoop():
             # Model-specific parameters
             MODEL_PARAMS = {
                 "Random": [],
+                "Pop": [],
                 "ItemKNN": [("k", "k"), ("shrink", "shrink")],
                 "UserKNN": [("k", "k"), ("shrink", "shrink")],
                 "BPR": [("reg_weight", "reg_weight")],
