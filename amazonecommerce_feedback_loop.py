@@ -144,10 +144,19 @@ class AmazonECommerceFeedbackLoop():
 
         self.start_experiment_date = self.cold_start_end_date + timedelta(days=1)
 
-        # Reomve users with less than 10 interactions in the initializatio phase
+        # Reomve users with less than 10 interactions in the initialization phase
         user_counts = self.dataset_unrolled_cold_start["user_id"].value_counts()
         active_users = user_counts[user_counts >= 10].index
         self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[self.dataset_unrolled_cold_start["user_id"].isin(active_users)]
+        
+        # If max_users is not null and an integer, randomly select max_users, delete the others
+        if self.config.max_users is not None and isinstance(self.config.max_users, int):
+            print(f"\n --- RANDOMLY SELECT {self.config.max_users} FOR THE SIMULATION --- \n")
+            all_users = self.dataset_unrolled_cold_start["user_id"].unique()
+            selected_users = self.rng.choice(all_users, size=self.config.max_users, replace=False)
+            self.dataset_unrolled_cold_start = self.dataset_unrolled_cold_start[
+                self.dataset_unrolled_cold_start["user_id"].isin(selected_users)
+            ]
 
         self.users_ids = self.dataset_unrolled_cold_start.user_id.unique().tolist()
         self.items_ids = self.dataset_unrolled_cold_start.item_id.unique().tolist()
@@ -415,7 +424,9 @@ class AmazonECommerceFeedbackLoop():
                 "seed": self.master_seed,
 
                 # Evaluation metrics
-                "metrics": ["NDCG", "Recall", "Precision", "Hit", "ItemCoverage", "MRR", "MAP"],
+                # In KDD catena for some reasone does not works
+                # "metrics": ["NDCG", "Recall", "Precision", "Hit", "ItemCoverage", "MRR", "MAP"],
+                "metrics": ["NDCG", "Recall", "Precision", "Hit", "MRR", "MAP"],
                 "topk": 10,
                 "valid_metric": "NDCG@10",
 
@@ -423,7 +434,7 @@ class AmazonECommerceFeedbackLoop():
                 "train_neg_sample_args": {"distribution": "uniform", "sample_num": 1},
 
                 # GPU settings
-                "use_gpu": torch.cuda.is_available(),
+                "use_gpu": False,
                 "gpu_id": 0,
             }
 
@@ -777,6 +788,7 @@ class AmazonECommerceFeedbackLoop():
         else:
             self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
             return None
+    
     def _build_window_for_epoch(self, k: int = 0, new_interactions = None):
         # FIRST INITIALIZATION OF THE DATASET
         if k == 0:
@@ -1591,7 +1603,7 @@ class AmazonECommerceFeedbackLoop():
     def init_choice_model(self) -> None:
         df_init = self.dataset_unrolled_cold_start.copy()
 
-        self.user_choice_model = ChoiceModel(interaction_df=df_init, config=self.config)
+        self.user_choice_model = ChoiceModel(interaction_df=df_init, config=self.config, refresh=True)
         self.user_choice_model.setup()
 
     def recom_choice_model(self, curr_epoch: int, user_id_recbole: int) -> list:
@@ -1603,7 +1615,6 @@ class AmazonECommerceFeedbackLoop():
         probs = probs / probs.sum()
         sampled_index = int(self.rng.choice(len(items), p=probs))
         selected_item_id = items[sampled_index]
-
         try:
             item_id_recbole = recbole_dataset.token2id(recbole_dataset.iid_field, str(selected_item_id))
         except ValueError:
@@ -1635,11 +1646,9 @@ class AmazonECommerceFeedbackLoop():
             all_test_results.append(test_result)
             return valid_result
 
-        # ---- patch ----
         trainer._train_epoch = custom_train_epoch
         trainer._valid_epoch = custom_valid_epoch
 
-        # ---- fit ----
         best_valid_result = trainer.fit(
             train_data=self.train_data,
             valid_data=self.valid_data,
@@ -1647,7 +1656,6 @@ class AmazonECommerceFeedbackLoop():
             saved=False
         )
 
-        # ---- assemble dataframes ----
         data_for_df = []
         max_epochs = max(len(all_train_losses), len(all_validation_results), len(all_test_results))
         for epoch in range(max_epochs):
@@ -1857,7 +1865,7 @@ class AmazonECommerceFeedbackLoop():
                     user_id_recbole = self.recbole_dataset.token2id(self.recbole_dataset.uid_field, user)
 
                     use_recommender_mask = (self.rng.random(basket_size) < p)
-                    
+
                     n_recommender = np.sum(use_recommender_mask)
                     n_choice = basket_size - n_recommender
                     

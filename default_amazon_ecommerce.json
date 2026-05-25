@@ -8,14 +8,20 @@
     "n_reps": 1,
     "use_cache": true,
     "recommender_model": {
-        "model_name": "BPR",
+        "model_name": "NeuMF",
         "epochs": 25,
-        "learning_rate": 0.001
+        "dropout_prob": 0.2,
+        "learning_rate": 0.004,
+        "mlp_hidden_size": [
+            64,
+            32,
+            16
+        ]
     },
     "user_strategy": {
         "model_name": "Custom choice model",
         "epochs": 1,
-        "tau": 1000,
+        "tau": null,
         "candidate_set": {
             "size": 50,
             "p_global": 0.40,
@@ -26,8 +32,9 @@
     "k_items": 20,
     "cold_start_months": 6,
     "epochs": 24,
-    "delta_training_epoch": 1,
+    "delta_training_epoch": 2,
     "use_all_data_from_start": true,
     "fixed_window_size": 6,
-    "item_level": "category"
+    "item_level": "category",
+    "max_users": null
 }

@@ -15,7 +15,7 @@ from utils import DotDict
 
 
 class ChoiceModel():
-    def __init__(self, interaction_df: pd.DataFrame, config: DotDict,  user_col: str = "user_id", item_col: str = "item_id", timestamp_col: str = "date", rating_col: str = None, **kwargs):
+    def __init__(self, interaction_df: pd.DataFrame, config: DotDict,  user_col: str = "user_id", item_col: str = "item_id", timestamp_col: str = "date", rating_col: str = None, refresh: bool = False, **kwargs):
         self.config = config
         
         self.df = interaction_df
@@ -29,6 +29,7 @@ class ChoiceModel():
         self.item_col = item_col
         self.time_col = timestamp_col
         self.rating_col = rating_col if rating_col is not None else None
+        self.refresh = refresh
 
         if self.config.dataset == "amazon_e_commerce":
             self.feedback_type = "implicit"
@@ -51,11 +52,15 @@ class ChoiceModel():
         p_global = candidate_set_settings.p_global
         p_user = candidate_set_settings.p_user
         p_random = candidate_set_settings.p_random
-        
+
+        n_users = self.df[self.user_col].nunique()
+
+        print(f"\n N users: {n_users} \n")
+
         candidate_size = self.config.user_strategy.candidate_set.size
-        self.tau_users_cache_path = f"exploration_score_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS.csv"
-        self.candidate_set_users_path = f"candidate_set_items_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS_size={candidate_size}_global={p_global}_individual={p_user}_unkown={p_random}.csv"
-        self.utilities_users_path = f"utilities_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS.csv"
+        self.tau_users_cache_path = f"exploration_score_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS_Nusers={n_users}.csv"
+        self.candidate_set_users_path = f"candidate_set_items_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS_size={candidate_size}_global={p_global}_individual={p_user}_unkown={p_random}_Nusers={n_users}.csv"
+        self.utilities_users_path = f"utilities_users_{self.config.dataset}_{self.config.time_window}_INIT_{self.config.cold_start_months}MONTHS_Nusers={n_users}.csv"
         
     def compute_gini(self, array):
         array = np.array(array)
@@ -451,24 +456,24 @@ class ChoiceModel():
         if len(months) < 3:
             raise Exception(f"The initialization dataset for the choice model must contains data for at least 3 months")
 
-        if os.path.exists(os.path.join(self.cache_root, self.tau_users_cache_path)):
-            results = pd.read_csv(os.path.join(self.cache_root, self.tau_users_cache_path))
-        else:
+        if self.refresh or (not os.path.exists(os.path.join(self.cache_root, self.tau_users_cache_path))):
             results = self.calculate_exploration_from_cumulative_curve(df=df)
             results.to_csv(os.path.join(self.cache_root, self.tau_users_cache_path), index=False)
+        else:
+            results = pd.read_csv(os.path.join(self.cache_root, self.tau_users_cache_path))
 
-        if os.path.exists(os.path.join(self.cache_root, self.candidate_set_users_path)) and self.config.user_strategy.candidate_set.size is not None:
+        if not self.refresh and (os.path.exists(os.path.join(self.cache_root, self.candidate_set_users_path)) and self.config.user_strategy.candidate_set.size is not None):
             candidate_sets = pd.read_csv(os.path.join(self.cache_root, self.candidate_set_users_path))
         else:
             candidate_sets = self.candidate_set_items(df=df)
             candidate_sets.to_csv(os.path.join(self.cache_root, self.candidate_set_users_path), index=False)
         
-        if os.path.exists(os.path.join(self.cache_root, self.utilities_users_path)):
-            utilities_users = pd.read_csv(os.path.join(self.cache_root, self.utilities_users_path), index_col=0)
-        else:
+        if self.refresh or (not os.path.join(self.cache_root, self.utilities_users_path)):
             utilities_users = self.compute_utilities(df=df, candidate_sets=candidate_sets, rating_col="rating" if self.feedback_type=="explicit" else None)
             utilities_users.to_csv(os.path.join(self.cache_root, self.utilities_users_path))
-        
+        else:
+            utilities_users = pd.read_csv(os.path.join(self.cache_root, self.utilities_users_path), index_col=0)
+
         self.exploration_rate_users = results
         self.candidate_sets = candidate_sets
         self.utilities_users = utilities_users
@@ -561,6 +566,7 @@ class ChoiceModel():
         # exit()
         item_ids = probs.index.to_list()
         probs_arr = probs.values
+
         return item_ids, probs_arr
     
     def update(self, new_interactions, epoch):

@@ -64,11 +64,12 @@ def main(args: argparse):
             # With no final part like this is the default version, which is 40-40-20
             if [0.40, 0.40, 0.20] != [config.user_strategy.candidate_set.p_global, config.user_strategy.candidate_set.p_user, config.user_strategy.candidate_set.p_random]:
                 fld_name += f"_global={config.user_strategy.candidate_set.p_global}_individual={config.user_strategy.candidate_set.p_user}_unkown={config.user_strategy.candidate_set.p_random}"
-
-            ps = [1, 0.8, 0.5, 0.2, 0.0]
-            ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
-            # ps = [0.0, 0.2, 0.5, 0.8, 1.0]
-            # ps_names = [f"{usrstrategy_model_name}", "P=0.2", "P=0.5", "P=0.8", f"{model_name}"]
+            if config.max_users is not None and isinstance(config.max_users, int):
+                fld_name += f"_maxUsers={config.max_users}"
+            # ps = [1, 0.8, 0.5, 0.2, 0.0]
+            # ps_names = [f"{model_name}" , "P=0.8", "P=0.5", "P=0.2", f"{usrstrategy_model_name}"]
+            ps = [0.0, 0.2, 0.5, 0.8, 1.0]
+            ps_names = [f"{usrstrategy_model_name}", "P=0.2", "P=0.5", "P=0.8", f"{model_name}"]
             k_av_items = config.k_items
 
             n_reps = getattr(config, "n_reps", 3)
