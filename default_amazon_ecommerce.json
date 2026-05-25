@@ -1,6 +1,6 @@
 {
     "dataset": "amazon_e_commerce",
-    "recbole_folder": "models_tmp_2",
+    "recbole_folder": "models_tmp_1",
     "frequent_costumers": true,
     "random_sample_users": false,
     "time_window": "2018-2022",
