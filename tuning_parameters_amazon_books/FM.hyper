@@ -1,3 +1,0 @@
-model: FM
-
-embedding_size choice [8,16,32,64]

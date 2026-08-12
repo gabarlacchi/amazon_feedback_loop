@@ -1,0 +1,14 @@
+model: MACR
+
+learning_rate loguniform -8,-3
+
+embedding_size choice [32,64,128]
+
+item_loss_weight choice [0.0001,0.001,0.01,0.1]
+user_loss_weight choice [0.0001,0.001,0.01,0.1]
+
+c choice [0.0,0.1,0.5,1.0]
+
+mlp_hidden_size choice ['[32,1]','[64,1]','[64,32,1]']
+
+dropout_prob choice [0.0,0.1,0.2,0.3]

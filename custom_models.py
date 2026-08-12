@@ -7,6 +7,9 @@ from recbole.data.interaction import Interaction
 from recbole.model.init import xavier_normal_initialization
 from recbole.model.layers import MLPLayers, BaseFactorizationMachine
 from torch.nn.init import normal_
+from recbole.model.general_recommender.lightgcn import LightGCN
+import math
+
 
 import torch.nn as nn
 import random
@@ -1551,6 +1554,80 @@ class UserKNN(GeneralRecommender):
 
         return result
 
+class LightGCN_IPS(LightGCN):
+    def __init__(self, config, dataset):
+        super().__init__(config, dataset)
+
+        self.ips_gamma = config["ips_gamma"]
+        self.ips_min = config["ips_min"]
+        self.ips_max_weight = config["ips_max_weight"]
+
+        inter = dataset.inter_matrix(form="coo")
+
+        counts = torch.bincount(
+            torch.tensor(inter.col, dtype=torch.long),
+            minlength=self.n_items
+        ).float()
+
+        # item 0 is normally RecBole's padding item
+        counts = counts.clamp_min(1.0)
+
+        propensity = counts / counts.max()
+        propensity = propensity.pow(self.ips_gamma)
+        propensity = propensity.clamp_min(self.ips_min)
+
+        self.register_buffer("item_propensity", propensity)
+
+    def calculate_loss(self, interaction):
+        self.restore_user_e = None
+        self.restore_item_e = None
+
+        user = interaction[self.USER_ID]
+        pos_item = interaction[self.ITEM_ID]
+        neg_item = interaction[self.NEG_ITEM_ID]
+
+        user_all_embeddings, item_all_embeddings = self.forward()
+
+        u_embeddings = user_all_embeddings[user]
+        pos_embeddings = item_all_embeddings[pos_item]
+        neg_embeddings = item_all_embeddings[neg_item]
+
+        pos_scores = torch.mul(
+            u_embeddings, pos_embeddings
+        ).sum(dim=1)
+
+        neg_scores = torch.mul(
+            u_embeddings, neg_embeddings
+        ).sum(dim=1)
+
+        # BPR loss per observation
+        bpr = -torch.log(
+            torch.sigmoid(pos_scores - neg_scores) + 1e-8
+        )
+
+        propensity = self.item_propensity[pos_item]
+
+        ips_weight = 1.0 / propensity
+        ips_weight = torch.clamp(
+            ips_weight,
+            max=self.ips_max_weight
+        )
+
+        mf_loss = torch.mean(ips_weight * bpr)
+
+        # same embedding regularization concept as LightGCN
+        u_ego = self.user_embedding(user)
+        pos_ego = self.item_embedding(pos_item)
+        neg_ego = self.item_embedding(neg_item)
+
+        reg_loss = (
+            u_ego.norm(2).pow(2)
+            + pos_ego.norm(2).pow(2)
+            + neg_ego.norm(2).pow(2)
+        ) / (2.0 * user.shape[0])
+
+        return mf_loss + self.reg_weight * reg_loss
+
 class EASE(GeneralRecommender):
     r"""EASE (Embarrassingly Shallow Autoencoders for Sparse Data)
     
@@ -1676,3 +1753,479 @@ class EASE(GeneralRecommender):
         result = torch.from_numpy(score).to(self.device)
         
         return result
+
+class AdaptiveDiversity(GeneralRecommender):
+    '''
+        Backbone:
+        - BPR
+        - LightGCN
+
+    '''
+
+    input_type = InputType.PAIRWISE
+
+    def __init__(self, config, dataset):
+        super().__init__(config, dataset)
+
+        self.backbone_name = config["backbone"]
+
+        # Create backbone recommender
+        if self.backbone_name == "BPR":
+            self.backbone = BPR(config, dataset)
+
+        elif self.backbone_name == "LightGCN":
+            self.backbone = LightGCN(config, dataset)
+
+        else:
+            raise ValueError(
+                f"Unsupported backbone: {self.backbone_name}. "
+                f"Supported: BPR, LightGCN"
+            )
+
+        # Build empirical distributions from current
+        # RecBole training dataset
+
+        self._build_diversity_statistics(dataset)
+
+    @torch.no_grad()
+    def update_diversity_state(self, user_id, item_id):
+        """
+        Update diversity statistics after ONE real simulated interaction.
+
+        Important: Updates the empirical distributions used by AdaptiveDiversity model
+        """
+
+        if torch.is_tensor(user_id):
+            user_id = int(user_id.item())
+
+        if torch.is_tensor(item_id):
+            item_id = int(item_id.item())
+
+        if item_id == 0:
+            raise ValueError(
+                "Cannot update diversity state with RecBole padding item 0."
+            )
+
+        # Update counts
+        self.interaction_counts[user_id, item_id] += 1.0
+        self.user_totals[user_id, 0] += 1.0
+
+        self.global_counts[item_id] += 1.0
+        self.global_total += 1.0
+
+        # Recompute q_u only for the affected user
+        self.user_prob[user_id] = (
+            self.interaction_counts[user_id]
+            / self.user_totals[user_id, 0].clamp_min(1.0)
+        )
+
+        # Recompute q_U
+        self.global_prob.copy_(
+            self.global_counts
+            / self.global_total.clamp_min(1.0)
+        )
+
+        eps = 1e-12
+
+        # Recompute H(q_u) and tau_u
+        p_user = self.user_prob[user_id]
+
+        user_entropy = -torch.sum(
+            torch.where(
+                p_user > 0,
+                p_user * torch.log(p_user + eps),
+                torch.zeros_like(p_user)
+            )
+        )
+
+        self.user_entropy[user_id] = user_entropy
+        self.user_threshold[user_id] = torch.exp(
+            -user_entropy
+        )
+
+        # Recompute H(q_U) and tau_U
+        p_global = self.global_prob
+
+        global_entropy = -torch.sum(
+            torch.where(
+                p_global > 0,
+                p_global * torch.log(p_global + eps),
+                torch.zeros_like(p_global)
+            )
+        )
+
+        self.global_entropy.copy_(global_entropy)
+
+        self.global_threshold.copy_(
+            torch.exp(-global_entropy)
+        )
+
+    def _build_diversity_statistics(self, dataset):
+        # Sparse user-item interaction matrix
+        inter_matrix = dataset.inter_matrix(form="coo")
+
+        users = torch.tensor(
+            inter_matrix.row,
+            dtype=torch.long
+        )
+
+        items = torch.tensor(
+            inter_matrix.col,
+            dtype=torch.long
+        )
+
+        # repeated interactions are explicitly preserved
+        counts = torch.zeros(
+            (self.n_users, self.n_items),
+            dtype=torch.float32
+        )
+
+        ones = torch.ones(
+            len(users),
+            dtype=torch.float32
+        )
+
+        counts.index_put_(
+            (users, items),
+            ones,
+            accumulate=True
+        )
+
+        # Individual distributions q_u
+        user_totals = counts.sum(
+            dim=1,
+            keepdim=True
+        )
+
+        safe_user_totals = user_totals.clamp_min(1.0)
+        user_prob = counts / safe_user_totals
+
+        global_counts = counts.sum(dim=0)
+        global_total = global_counts.sum()
+
+        safe_global_total = global_total.clamp_min(1.0)
+        global_prob = global_counts / safe_global_total
+
+        self.register_buffer(
+            "user_totals",
+            user_totals
+        )
+
+        self.register_buffer(
+            "global_total",
+            global_total
+        )
+
+        # Save as buffers so they move with .to(device)
+        self.register_buffer(
+            "interaction_counts",
+            counts
+        )
+        self.register_buffer(
+            "user_prob",
+            user_prob
+        )
+        self.register_buffer(
+            "global_counts",
+            global_counts
+        )
+        self.register_buffer(
+            "global_prob",
+            global_prob
+        )
+
+        # Compute thresholds once for this dataset state
+        self._compute_entropy_thresholds()
+
+    def _compute_entropy_thresholds(self):
+
+        eps = 1e-12
+        # Individual entropy H(q_u)
+        user_p = self.user_prob
+        user_entropy = -torch.sum(
+            torch.where(
+                user_p > 0,
+                user_p * torch.log(user_p + eps),
+                torch.zeros_like(user_p)
+            ),
+            dim=1
+        )
+        user_threshold = torch.exp(
+            -user_entropy
+        )
+
+        # Collective entropy H(q_U)
+        global_p = self.global_prob
+        global_entropy = -torch.sum(
+            torch.where(
+                global_p > 0,
+                global_p * torch.log(global_p + eps),
+                torch.zeros_like(global_p)
+            )
+        )
+        global_threshold = torch.exp(
+            -global_entropy
+        )
+        self.register_buffer(
+            "user_entropy",
+            user_entropy
+        )
+        self.register_buffer(
+            "user_threshold",
+            user_threshold
+        )
+        self.register_buffer(
+            "global_entropy",
+            global_entropy
+        )
+        self.register_buffer(
+            "global_threshold",
+            global_threshold
+        )
+
+    def _get_admissible_mask(self, user):
+
+        q_user = self.user_prob[user]
+
+        tau_user = (
+            self.user_threshold[user]
+            .unsqueeze(1)
+        )
+
+        individual_mask = (
+            q_user <= tau_user
+        )
+
+        collective_mask = (
+            self.global_prob.unsqueeze(0)
+            <= self.global_threshold
+        ).expand(
+            user.shape[0],
+            -1
+        ).clone()
+
+        admissible_mask = (
+            individual_mask
+            & collective_mask
+        )
+
+        # RecBole padding
+        individual_mask[:, 0] = False
+        collective_mask[:, 0] = False
+        admissible_mask[:, 0] = False
+
+        return (
+            individual_mask,
+            collective_mask,
+            admissible_mask
+        )
+
+    def calculate_loss(self, interaction):
+        return self.backbone.calculate_loss(
+            interaction
+        )
+
+    def predict(self, interaction):
+        return self.backbone.predict(
+            interaction
+        )
+
+    def full_sort_predict(self, interaction):
+        user = interaction[self.USER_ID]
+        
+        # Base recommender relevance scores
+        scores = self.backbone.full_sort_predict(
+            interaction
+        )
+        scores = scores.view(
+            user.shape[0],
+            self.n_items
+        )
+
+        # Diversity admissibility
+        (
+            individual_mask,
+            collective_mask,
+            admissible_mask
+        ) = self._get_admissible_mask(user)
+        final_scores = scores.clone()
+
+        for row in range(user.shape[0]):
+
+            # Case 1:
+            # A_u ∩ A_U is non-empty
+
+            if admissible_mask[row].any():
+                mask = admissible_mask[row]
+
+            # Case 2:
+            # intersection empty: prioritize collective diversity
+            elif collective_mask[row].any():
+
+                mask = collective_mask[row].clone()
+                mask[0] = False
+
+            # Case 3:
+            # theoretical degenerate fallback: globally rarest item
+
+            else:
+
+                mask = torch.zeros(
+                    self.n_items,
+                    dtype=torch.bool,
+                    device=scores.device
+                )
+
+                counts = self.global_counts.clone()
+
+                # Never recommend RecBole padding
+                counts[0] = float("inf")
+                rarest_item = torch.argmin(
+                    counts
+                )
+                mask[rarest_item] = True
+
+            # Remove every inadmissible score
+            final_scores[row][~mask] = -torch.inf
+
+        # DEBUG
+        # for row in range(user.shape[0]):
+        #     user_id = int(user[row].item())
+        #     print(
+        #         f"[AdaptiveDiversity user={user_id}] "
+        #         f"individual={individual_mask[row].sum().item()}, "
+        #         f"collective={collective_mask[row].sum().item()}, "
+        #         f"intersection={admissible_mask[row].sum().item()}"
+        #     )
+        #     print(
+        #         f"tau_user={self.user_threshold[user_id].item():.6f}, "
+        #         f"tau_global={self.global_threshold.item():.6f}"
+        #     )
+
+        #     n_items = self.n_items - 1  # exclude padding
+
+        #     print(
+        #         f"individual={individual_mask[row].sum().item()} "
+        #         f"({100 * individual_mask[row].sum().item() / n_items:.2f}%)"
+        #     )
+
+        #     print(
+        #         f"collective={collective_mask[row].sum().item()} "
+        #         f"({100 * collective_mask[row].sum().item() / n_items:.2f}%)"
+        #     )
+
+        #     print(
+        #         f"intersection={admissible_mask[row].sum().item()} "
+        #         f"({100 * admissible_mask[row].sum().item() / n_items:.2f}%)"
+        #     )
+
+        #     h_user = self.user_entropy[user_id].item()
+        #     h_global = self.global_entropy.item()
+
+        #     print(
+        #         f"H_user={h_user:.4f}, "
+        #         f"effective_user_items={math.exp(h_user):.2f}"
+        #     )
+
+        #     print(
+        #         f"H_global={h_global:.4f}, "
+        #         f"effective_global_items={math.exp(h_global):.2f}"
+        #     )
+
+        #     only_individual = (
+        #         individual_mask[row]
+        #         & ~collective_mask[row]
+        #     ).sum().item()
+
+        #     only_collective = (
+        #         collective_mask[row]
+        #         & ~individual_mask[row]
+        #     ).sum().item()
+
+        #     neither = (
+        #         ~individual_mask[row]
+        #         & ~collective_mask[row]
+        #     ).sum().item()
+
+        #     print(
+        #         f"individual_only={only_individual}, "
+        #         f"collective_only={only_collective}, "
+        #         f"neither={neither}"
+        #     )
+
+        #     danger_zone = (
+        #         individual_mask[row]
+        #         & ~collective_mask[row]
+        #     )
+
+        #     print(
+        #         f"individual-but-not-collective="
+        #         f"{danger_zone.sum().item()}"
+        #     )
+
+        #     global_p = self.global_prob.clone()
+
+        #     valid = torch.arange(
+        #         self.n_items,
+        #         device=global_p.device
+        #     ) != 0
+
+        #     above = torch.where(
+        #         valid & (global_p > self.global_threshold)
+        #     )[0]
+
+        #     below = torch.where(
+        #         valid & (global_p <= self.global_threshold)
+        #     )[0]
+
+        #     print(
+        #         f"globally above threshold: {len(above)}"
+        #     )
+
+        #     top_vals, top_idx = torch.topk(
+        #         self.global_prob[1:],
+        #         k=min(10, self.n_items - 1)
+        #     )
+
+        #     top_idx = top_idx + 1
+
+        #     for iid, prob in zip(
+        #         top_idx.tolist(),
+        #         top_vals.tolist()
+        #     ):
+        #         print(
+        #             f"item={iid}, "
+        #             f"q_global={prob:.6f}, "
+        #             f"tau_global={self.global_threshold.item():.6f}, "
+        #             f"admissible={prob <= self.global_threshold.item()}"
+        #         )
+
+        #     selected_item = torch.argmax(
+        #         final_scores[row]
+        #     ).item()
+
+        #     print(
+        #         f"selected={selected_item}"
+        #     )
+
+        #     print(
+        #         f"q_user(selected)="
+        #         f"{self.user_prob[user_id, selected_item].item():.6f}"
+        #     )
+
+        #     print(
+        #         f"tau_user="
+        #         f"{self.user_threshold[user_id].item():.6f}"
+        #     )
+
+        #     print(
+        #         f"q_global(selected)="
+        #         f"{self.global_prob[selected_item].item():.6f}"
+        #     )
+
+        #     print(
+        #         f"tau_global="
+        #         f"{self.global_threshold.item():.6f}"
+        #     )
+        # exit()
+        return final_scores.view(-1)

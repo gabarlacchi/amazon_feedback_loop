@@ -1,0 +1,11 @@
+model: LightGCN_IPS
+
+learning_rate loguniform -8,-3
+
+embedding_size choice [32,64,128]
+n_layers choice [1,2,3]
+reg_weight loguniform -10,-3
+
+ips_gamma choice [0.25,0.5,0.75,1.0]
+ips_min choice [0.01,0.025,0.05,0.1]
+ips_max_weight choice [5.0,10.0,20.0,50.0]

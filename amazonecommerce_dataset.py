@@ -17,7 +17,7 @@ class AmazonECommerceDataset:
     def __init__(self, config: DotDict, **kwargs):
         self.config = config
 
-        self.dataset_root_path = f"./data"
+        self.dataset_root_path = f"./data/amazon_ecommerce_10"
         self.dataset_filename = "amazon-purchases.csv"
         self.dataset_features_filename = "survey.csv"
 
@@ -105,6 +105,14 @@ class AmazonECommerceDataset:
 
             df_dataset = df_dataset.rename(columns=rename_dict)
 
+            # Remove gift card interactions
+            df_dataset = df_dataset[
+                ~df_dataset["category"]
+                    .astype(str)
+                    .str.lower()
+                    .str.startswith("gift")
+            ]
+
             unroll_df = []
             for _, row in df_dataset.iterrows():
                 for _ in range(int(row['quantity'])):
@@ -120,6 +128,7 @@ class AmazonECommerceDataset:
 
         else:
             self.unrolled_dataset_total = pd.read_csv(self.unrolled_dataset_total_path, index_col=0)
+
 
     def real_dataset_save_cache(self, start_date: datetime, end_date: datetime, users: list, items: list):
         """

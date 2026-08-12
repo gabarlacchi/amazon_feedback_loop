@@ -1,3 +1,8 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "recbole_debias"))
+
 from datetime import date, datetime, timedelta
 from datetime import time as time_datetime
 from dateutil.relativedelta import relativedelta
@@ -34,9 +39,55 @@ from recbole.utils import get_model, get_trainer
 
 from utils import DotDict, get_consistent_users, _setup_repro
 # from custom_models import UserKNN, IndividualRandom, IndividualPopularity, LightGCN, BPR, SpectralCF, NeuMF, NNCF
-from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, EASE, NFM, DCNV2
+from custom_models import NeuMF, BPR, UserKNN, SpectralCF, FM, DeepFM, ItemKNN, EASE, NFM, DCNV2, LightGCN_IPS, AdaptiveDiversity
 from amazonecommerce_dataset import AmazonECommerceDataset
 from choice_model import ChoiceModel
+
+from recbole_debias.recbole_debias.model.debiased_recommender.mf_ips import MF_IPS
+from recbole_debias.recbole_debias.model.debiased_recommender.dice import DICE
+from recbole_debias.recbole_debias.model.debiased_recommender.macr import MACR
+from recbole_debias.recbole_debias.data.dataset import DebiasDataset
+
+from recbole_debias.recbole_debias.trainer import DICETrainer
+from recbole_debias.recbole_debias.sampler import DICESampler
+
+from recbole_debias.recbole_debias.data.utils import data_preparation as debias_data_preparation
+
+CUSTOM_MODELS = {
+    "NeuMF",
+    "BPR",
+    "UserKNN",
+    "ItemKNN",
+    "SpectralCF",
+    "FM",
+    "DeepFM",
+    "EASE",
+    "NFM",
+    "DCNV2",
+    "MF_IPS",
+    "DICE",
+    "LightGCN_IPS",
+    "MACR_MF",
+    "AdaptiveDiversity"
+}
+
+custom_model_map = {
+    "NeuMF": NeuMF,
+    "BPR": BPR,
+    "UserKNN": UserKNN,
+    "ItemKNN": ItemKNN,
+    "SpectralCF": SpectralCF,
+    "FM": FM,
+    "DeepFM": DeepFM,
+    "EASE": EASE,
+    "NFM": NFM,
+    "DCNV2": DCNV2,
+    "MF_IPS": MF_IPS,
+    "DICE": DICE,
+    "LightGCN_IPS": LightGCN_IPS,
+    "MACR_MF": MACR,
+    "AdaptiveDiversity": AdaptiveDiversity
+}
 
 class AmazonECommerceFeedbackLoop():
     def __init__(self, config: DotDict, initialization_dataset: AmazonECommerceDataset, **kwargs):
@@ -234,8 +285,8 @@ class AmazonECommerceFeedbackLoop():
         df['education'] = (
             df['education']
             .map(education_map)
-            .fillna('unknown')
             .astype('string')
+            .fillna('unknown')
         )
 
         # Gender
@@ -320,35 +371,59 @@ class AmazonECommerceFeedbackLoop():
 
         return unrolled
 
-    def init_recbole_model(self, is_first_init=False, warm_start=True, results_path=None):
+    @staticmethod
+    def _handle_cold_start_users(train_df, val_df, test_df):
+        '''
+        When split by time, a user can be in the val and/or test set but not in the training period.
+        Add the first val interaction within the training period
+        '''
+        train_min_ts = train_df["timestamp:float"].min()
+        train_max_ts = train_df["timestamp:float"].max()
+        train_users = set(train_df["user_id:token"].unique())
+        
+        # Check validation set
+        val_users = val_df["user_id:token"].unique()
+        val_cold_users = set(val_users) - train_users
+        if val_cold_users:
+            # Suppose the interactions are sorted
+            val_cold_mask = val_df["user_id:token"].isin(val_cold_users)
+            first_interactions = val_df[val_cold_mask].groupby("user_id:token", sort=False).head(1).copy()
+            np.random.seed(42)
+            new_timestamps = np.random.uniform(
+                train_min_ts, train_max_ts, size=len(first_interactions)
+            )
+            first_interactions["timestamp:float"] = new_timestamps
+            # UPDATE THE DATE COLUMN TOO
+            first_interactions["date"] = pd.to_datetime(new_timestamps, unit='s', utc=True).tz_convert("Europe/Rome").normalize()
+            
+            # Concatenate to training
+            train_df = pd.concat([train_df, first_interactions], ignore_index=True)
+            # Remove from validation using index
+            val_df = val_df.drop(first_interactions.index).reset_index(drop=True)
+        
+        # Check test set
+        train_users = set(train_df["user_id:token"].unique())
+        test_users = test_df["user_id:token"].unique()
+        test_cold_users = set(test_users) - train_users
+        if test_cold_users:
+            test_cold_mask = test_df["user_id:token"].isin(test_cold_users)
+            first_interactions = test_df[test_cold_mask].groupby("user_id:token", sort=False).head(1).copy()
+            new_timestamps = np.random.uniform(
+                train_min_ts, train_max_ts, size=len(first_interactions)
+            )
+            first_interactions["timestamp:float"] = new_timestamps
+            # UPDATE THE DATE COLUMN TOO
+            first_interactions["date"] = pd.to_datetime(new_timestamps, unit='s', utc=True).tz_convert("Europe/Rome").normalize()
+            
+            train_df = pd.concat([train_df, first_interactions], ignore_index=True)
+            test_df = test_df.drop(first_interactions.index).reset_index(drop=True)
+        
+        if val_cold_users or test_cold_users:
+            train_df = train_df.sort_values(["user_id:token", "timestamp:float"], ignore_index=True)
+        
+        return train_df, val_df, test_df
 
-        # Some models need custom implemention, add here
-        CUSTOM_MODELS = {
-            "NeuMF",
-            "BPR",
-            "UserKNN",
-            "ItemKNN",
-            "SpectralCF",
-            "FM",
-            "DeepFM",
-            "EASE",
-            "NFM",
-            "FM",
-            "DCNV2"
-        }
-        custom_model_map = {
-            "NeuMF": NeuMF,
-            "BPR": BPR,
-            "UserKNN": UserKNN,
-            "ItemKNN": ItemKNN,
-            "SpectralCF": SpectralCF,
-            "FM": FM,
-            "DeepFM": DeepFM,
-            "EASE": EASE,
-            "NFM": NFM,
-            "FM": FM,
-            "DCNV2": DCNV2
-        }
+    
 
         if is_first_init or not hasattr(self, 'model_config'):
             name_map = {
@@ -360,15 +435,21 @@ class AmazonECommerceFeedbackLoop():
                 "BPR": "BPR",
                 "LightGCN": "LightGCN",
                 "SpectralCF": "SpectralCF",
-                "NGCF":"NGCF",
+                "NGCF": "NGCF",
                 "SGL": "SGL",
                 "EASE": "EASE",
                 "NeuMF": "NeuMF",
-                "DeepFM": "DeepFM", 
+                "DeepFM": "DeepFM",
                 "xDeepFM": "xDeepFM",
                 "DCNV2": "DCNV2",
                 "FM": "FM",
-                "NFM": "NFM"
+                "NFM": "NFM",
+                "MF-IPS": "MF_IPS",
+                "MF_IPS": "MF_IPS",
+                "LightGCN_IPS": "LightGCN_IPS",
+                "DICE": "DICE",
+                "MACR_MF": "MACR_MF",
+                "AdaptiveDiversity": "AdaptiveDiversity"
             }
 
             try:
@@ -427,8 +508,8 @@ class AmazonECommerceFeedbackLoop():
                 # In KDD catena for some reasone does not works
                 # "metrics": ["NDCG", "Recall", "Precision", "Hit", "ItemCoverage", "MRR", "MAP"],
                 "metrics": ["NDCG", "Recall", "Precision", "Hit", "MRR", "MAP"],
-                "topk": 10,
-                "valid_metric": "NDCG@10",
+                "topk": 20,
+                "valid_metric": "NDCG@20",
 
                 # Negative sampling for implicit feedback
                 "train_neg_sample_args": {"distribution": "uniform", "sample_num": 1},
@@ -520,40 +601,18 @@ class AmazonECommerceFeedbackLoop():
                 "NFM": [
                     ("dropout_prob", "dropout_prob"),
                     ("mlp_hidden_size", "mlp_hidden_size")
+                ],
+                "AdaptiveDiversity": [
+                    ("backbone", "backbone"),
+                    ("embedding_size", "embedding_size"),
+                    # Used by LightGCN
+                    ("n_layers", "n_layers"),
+                    ("reg_weight", "reg_weight"),
                 ]
             }
 
             for attr, key in MODEL_PARAMS[self.model_name_recbole]:
                 add_param(attr, key)
-            
-            # NOT IT WORKS FOR STANDARD MODELS
-            # FOR USER KNN THE LIBRARY DOES NOT RECOGNIZE THE MODEL
-            # SO FAR, I DID NOT UNDERSTAND HOW TO HANDLE IT 
-            # IF I UNCOMMENT THE FOLLOWING, THE OTHER CUSTOM MODELS WORKS DIFFERENTLY BECAUSE THE DEFAULT PARAMETERS ARE DIFFERENT
-            # try:
-            #     # For custom models, use a dummy valid model name for Config validation
-            #     config_model_name = "BPR" if self.use_custom_model else self.model_name_recbole
-                
-            #     self.model_config = Config(
-            #         model=config_model_name,  # Use dummy name for custom models
-            #         dataset="experiment_dataset",
-            #         config_dict=self.parameter_dict
-            #     )
-                
-            #     # Override with actual model name after Config is created
-            #     if self.use_custom_model:
-            #         self.model_config["model"] = self.model_name_recbole
-                
-            #     init_seed(self.model_config["seed"], self.model_config["reproducibility"])
-            #     init_logger(self.model_config)
-            #     self.logger = getLogger()
-            #     self.logger.info(f"[Epoch 0] Full initialization complete")
-            # except Exception as e:
-            #     raise Exception(f"Error during the configuration of the model -> {e}")
-
-            # print(self.parameter_dict)
-            # exit()
-
             try:
                 self.model_config = Config(
                     model=self.model_name_recbole,
@@ -569,10 +628,16 @@ class AmazonECommerceFeedbackLoop():
 
             try:
                 self.recbole_dataset = create_dataset(self.model_config)
-                self.train_data, self.valid_data, self.test_data = data_preparation(
-                    config=self.model_config,
-                    dataset=self.recbole_dataset
-                )
+                if self.model_name_recbole == "DICE":
+                    self.train_data, self.valid_data, self.test_data = debias_data_preparation(
+                        config=self.model_config,
+                        dataset=self.recbole_dataset,
+                    )
+                else:
+                    self.train_data, self.valid_data, self.test_data = data_preparation(
+                        config=self.model_config,
+                        dataset=self.recbole_dataset,
+                    )
                 self.logger.info(self.train_data)
             except Exception as e:
                 print(traceback.format_exc())
@@ -601,10 +666,16 @@ class AmazonECommerceFeedbackLoop():
         else:
             try:
                 self.recbole_dataset = create_dataset(self.model_config)
-                self.train_data, self.valid_data, self.test_data = data_preparation(
-                    config=self.model_config,
-                    dataset=self.recbole_dataset
-                )
+                if self.model_name_recbole == "DICE":
+                    self.train_data, self.valid_data, self.test_data = debias_data_preparation(
+                        config=self.model_config,
+                        dataset=self.recbole_dataset,
+                    )
+                else:
+                    self.train_data, self.valid_data, self.test_data = data_preparation(
+                        config=self.model_config,
+                        dataset=self.recbole_dataset,
+                    )
 
             except Exception as e:
                 print(traceback.format_exc())
@@ -642,153 +713,559 @@ class AmazonECommerceFeedbackLoop():
                     self.train_data.dataset
                 ).to(self.model_config["device"])
 
+    def init_recbole_model(self, is_first_init=False, warm_start=True, results_path=None):
+        # Some debias models needs specific data preparation
+        DEBIAS_DATASET_MODELS = {
+            "MF_IPS",
+            "DICE",
+            "MACR_MF",
+        }
+
+        SPECIAL_DATA_PREPARATION = {
+            "DICE",
+        }
+
+        if is_first_init or not hasattr(self, "model_config"):
+            name_map = {
+                "Collective Popularity": "Pop",
+                "Collective Random": "Random",
+                "CF_KNN_item": "ItemKNN",
+                "CF_KNN_user": "UserKNN",
+                "MultiVAE": "MultiVAE",
+                "BPR": "BPR",
+                "LightGCN": "LightGCN",
+                "SpectralCF": "SpectralCF",
+                "NGCF": "NGCF",
+                "SGL": "SGL",
+                "EASE": "EASE",
+                "NeuMF": "NeuMF",
+                "DeepFM": "DeepFM",
+                "xDeepFM": "xDeepFM",
+                "DCNV2": "DCNV2",
+                "FM": "FM",
+                "NFM": "NFM",
+                "MF-IPS": "MF_IPS",
+                "MF_IPS": "MF_IPS",
+                "LightGCN_IPS": "LightGCN_IPS",
+                "DICE": "DICE",
+                "MACR_MF": "MACR_MF",
+                "AdaptiveDiversity": "AdaptiveDiversity"
+            }
+            try:
+                self.raw_model_name = self.config.recommender_model.model_name
+                self.model_name_recbole = name_map[self.raw_model_name]
+                self.use_custom_model = self.model_name_recbole in CUSTOM_MODELS
+            except Exception as e:
+                traceback.print_exc()
+                # raise Exception(f"{e if isinstance(e, KeyError) else str(e)}")
+
+            CONTEXT_AWARE_MODELS = {"DeepFM", "xDeepFM", "DCNV2", "FM", "NFM"}
+            needs_features = self.model_name_recbole in CONTEXT_AWARE_MODELS
+            needs_features = True
+
+            base_inter_cols = ["user_id", "item_id", "timestamp", "label"]
+
+            if needs_features:
+                user_cols = ["user_id", "age", "country", "gender"]
+                item_cols = ["item_id"]
+            else:
+                user_cols = None
+                item_cols = None
+
+            self.parameter_dict = {
+                "data_path": self.tmp_folder,
+                "checkpoint_dir": os.path.join(self.tmp_folder, "checkpoints"),
+
+                "USER_ID_FIELD": "user_id",
+                "ITEM_ID_FIELD": "item_id",
+                "TIME_FIELD": "timestamp",
+                "LABEL_FIELD": "label",
+
+                "load_col": {
+                    "inter": base_inter_cols,
+                },
+
+                "epochs": getattr(self.config.recommender_model, "epochs", 10),
+                "eval_args": {
+                    "group_by": "user",
+                    "order": "TO",
+                    "mode": "full",
+                },
+                "benchmark_filename": ["train", "val", "test"],
+
+                "reproducibility": True,
+                "seed": self.master_seed,
+
+                "metrics": ["NDCG", "Recall", "Precision", "Hit", "MRR", "MAP"],
+                "topk": 20,
+                "valid_metric": "NDCG@20",
+
+                "train_neg_sample_args": {
+                    "distribution": "uniform",
+                    "sample_num": 1,
+                },
+
+                "use_gpu": False,
+                "gpu_id": 0,
+            }
+
+            if user_cols:
+                self.parameter_dict["load_col"]["user"] = user_cols
+            if item_cols:
+                self.parameter_dict["load_col"]["item"] = item_cols
+
+            model_cfg = getattr(self.config, "recommender_model", None)
+
+            def add_param(attr, key=None):
+                if model_cfg and hasattr(model_cfg, attr):
+                    val = getattr(model_cfg, attr)
+                    if val is not None:
+                        self.parameter_dict[key or attr] = val
+
+            add_param("learning_rate")
+            add_param("epochs")
+
+            MODEL_PARAMS = {
+                "Random": [],
+                "Pop": [],
+                "ItemKNN": [
+                    ("k", "k"),
+                    ("shrink", "shrink"),
+                ],
+                "UserKNN": [
+                    ("k", "k"),
+                    ("shrink", "shrink"),
+                ],
+                "BPR": [
+                    ("reg_weight", "reg_weight"),
+                ],
+                "LightGCN": [
+                    ("embedding_size", "embedding_size"),
+                    ("reg_weight", "reg_weight"),
+                    ("n_layers", "n_layers"),
+                ],
+                "LightGCN_IPS": [
+                    ("embedding_size", "embedding_size"),
+                    ("reg_weight", "reg_weight"),
+                    ("n_layers", "n_layers"),
+                    ("ips_gamma", "ips_gamma"),
+                    ("ips_min", "ips_min"),
+                    ("ips_max_weight", "ips_max_weight"),
+                ],
+                "NeuMF": [
+                    ("mlp_hidden_size", "mlp_hidden_size"),
+                    ("user_embedding_size", "mlp_embedding_size"),
+                    ("item_embedding_size", "mf_embedding_size"),
+                    ("dropout_prob", "dropout_prob"),
+                ],
+                "MultiVAE": [
+                    ("mlp_hidden_size", "mlp_hidden_size"),
+                    ("dropout_prob", "dropout_prob"),
+                    ("latent_dimension", "latent_dimension"),
+                ],
+                "SpectralCF": [
+                    ("n_layers", "n_layers"),
+                    ("reg_weight", "reg_weight"),
+                ],
+                "NGCF": [
+                    ("embedding_size", "embedding_size"),
+                    ("hidden_size_list", "hidden_size_list"),
+                    ("node_dropout", "node_dropout"),
+                    ("message_dropout", "message_dropout"),
+                    ("reg_weight", "reg_weight"),
+                ],
+                "SGL": [
+                    ("embedding_size", "embedding_size"),
+                    ("n_layers", "n_layers"),
+                    ("reg_weight", "reg_weight"),
+                    ("ssl_tau", "ssl_tau"),
+                    ("ssl_weight", "ssl_weight"),
+                    ("drop_ratio", "drop_ratio"),
+                    ("type", "type"),
+                ],
+                "EASE": [
+                    ("reg_weight", "reg_weight"),
+                ],
+                "DeepFM": [
+                    ("embedding_size", "embedding_size"),
+                    ("mlp_hidden_size", "mlp_hidden_size"),
+                    ("dropout_prob", "dropout_prob"),
+                ],
+                "xDeepFM": [
+                    ("embedding_size", "embedding_size"),
+                    ("mlp_hidden_size", "mlp_hidden_size"),
+                    ("dropout_prob", "dropout_prob"),
+                    ("reg_weight", "reg_weight"),
+                    ("cin_layer_size", "cin_layer_size"),
+                    ("direct", "direct"),
+                ],
+                "DCNV2": [
+                    ("embedding_size", "embedding_size"),
+                    ("cross_layer_num", "cross_layer_num"),
+                    ("mlp_hidden_size", "mlp_hidden_size"),
+                    ("dropout_prob", "dropout_prob"),
+                    ("reg_weight", "reg_weight"),
+                    ("structure", "structure"),
+                    ("mixed", "mixed"),
+                    ("expert_num", "expert_num"),
+                    ("low_rank", "low_rank"),
+                ],
+                "FM": [
+                    ("embedding_size", "embedding_size"),
+                ],
+                "NFM": [
+                    ("dropout_prob", "dropout_prob"),
+                    ("mlp_hidden_size", "mlp_hidden_size"),
+                ],
+                "MF_IPS": [
+                    ("embedding_size", "embedding_size"),
+                    ("eta", "eta"),
+                    ("pscore_method", "pscore_method"),
+                ],
+                "DICE": [
+                    ("embedding_size", "embedding_size"),
+                    ("dis_loss", "dis_loss"),
+                    ("dis_pen", "dis_pen"),
+                    ("int_weight", "int_weight"),
+                    ("pop_weight", "pop_weight"),
+                    ("adaptive", "adaptive"),
+                    ("decay", "decay"),
+                ],
+                "MACR_MF": [
+                    ("embedding_size", "embedding_size"),
+                    ("item_loss_weight", "item_loss_weight"),
+                    ("user_loss_weight", "user_loss_weight"),
+                    ("c", "c"),
+                    ("mlp_hidden_size", "mlp_hidden_size"),
+                    ("dropout_prob", "dropout_prob"),
+                ],
+                "InvCF": [
+                    ("embedding_size", "embedding_size"),
+                    ("n_layers", "n_layers"),
+                    ("tau", "tau"),
+                    ("neg_sample", "neg_sample"),
+                    ("lambda1", "lambda1"),
+                    ("lambda2", "lambda2"),
+                    ("lambda3", "lambda3"),
+                ],
+                "PAAC": [
+                    ("embedding_size", "embedding_size"),
+                    ("n_layers", "n_layers"),
+                    ("reg_weight", "reg_weight"),
+                    ("temperature", "temperature"),
+                    ("align_weight", "align_weight"),
+                    ("cl_weight", "cl_weight"),
+                ],
+                "AdaptiveDiversity": [
+                    ("backbone", "backbone"),
+                    ("embedding_size", "embedding_size"),
+                    ("reg_weight", "reg_weight"),
+                    ("n_layers", "n_layers"),
+                ]
+            }
+
+            for attr, key in MODEL_PARAMS[self.model_name_recbole]:
+                add_param(attr, key)
+
+            if self.model_name_recbole == "MF_IPS":
+                self.parameter_dict["train_neg_sample_args"] = None
+                self.parameter_dict.setdefault("embedding_size", 64)
+                self.parameter_dict.setdefault("eta", 1)
+                self.parameter_dict.setdefault("pscore_method", "item")
+            elif self.model_name_recbole == "DICE":
+                self.parameter_dict.setdefault("embedding_size", 64)
+                self.parameter_dict.setdefault("dis_loss", "L1")
+                self.parameter_dict.setdefault("dis_pen", 0.01)
+                self.parameter_dict.setdefault("int_weight", 0.1)
+                self.parameter_dict.setdefault("pop_weight", 0.1)
+                self.parameter_dict.setdefault("adaptive", False)
+                self.parameter_dict.setdefault("decay", 0.9)
+                self.parameter_dict.setdefault("MASK_FIELD", "mask")
+            elif self.model_name_recbole == "MACR_MF":
+                self.parameter_dict.setdefault("embedding_size", 64)
+                self.parameter_dict.setdefault("item_loss_weight", 0.001)
+                self.parameter_dict.setdefault("user_loss_weight", 0.001)
+                self.parameter_dict.setdefault("c", 0.0)
+                self.parameter_dict.setdefault("mlp_hidden_size", [32, 1])
+                self.parameter_dict.setdefault("dropout_prob", 0.0)
+
+                self.parameter_dict["train_neg_sample_args"] = {
+                    "distribution": "popularity",
+                    "sample_num": 1,
+                    "alpha": 1.0,
+                    "dynamic": False,
+                    "candidate_num": 0,
+                }
+
+                self.parameter_dict["eval_args"] = {
+                    "group_by": "user",
+                    "order": "TO",
+                    "mode": "full",
+                }
+
+                self.parameter_dict["eval_neg_sample_args"] = {
+                    "distribution": "uniform",
+                    "sample_num": "none",
+                }
+
+            if self.use_custom_model:
+                model_for_config = custom_model_map[self.model_name_recbole]
+            else:
+                model_for_config = self.model_name_recbole
+            try:
+                self.model_config = Config(
+                    model=model_for_config,
+                    dataset="experiment_dataset",
+                    config_dict=self.parameter_dict,
+                )
+                init_seed(self.model_config["seed"], self.model_config["reproducibility"])
+                init_logger(self.model_config)
+                self.logger = getLogger()
+                self.logger.info("[Epoch 0] Full initialization complete")
+            except Exception as e:
+                raise Exception(f"Error during the configuration of the model -> {e}")
+
+            
+
+            try:
+                if self.model_name_recbole in DEBIAS_DATASET_MODELS:
+                    self.recbole_dataset = DebiasDataset(self.model_config)
+                else:
+                    self.recbole_dataset = create_dataset(self.model_config)
+
+                if self.model_name_recbole in SPECIAL_DATA_PREPARATION:
+                    self.train_data, self.valid_data, self.test_data = (
+                        debias_data_preparation(
+                            config=self.model_config,
+                            dataset=self.recbole_dataset,
+                        )
+                    )
+                else:
+                    self.train_data, self.valid_data, self.test_data = (
+                        data_preparation(
+                            config=self.model_config,
+                            dataset=self.recbole_dataset,
+                        )
+                    )
+
+                self.logger.info(self.train_data)
+
+            except Exception as e:
+                print(traceback.format_exc())
+                raise Exception(
+                    f"Error during the initialization of the dataset -> {e}"
+                )
+            # if self.use_custom_model:
+            #     model_cls = custom_model_map[self.model_name_recbole]
+            # else:
+            #     model_cls = get_model(self.model_config["model"])
+
+            model_cls = self.model_config.model_class
+
+            self.recbole_model = model_cls(
+                self.model_config,
+                self.train_data.dataset,
+            ).to(self.model_config["device"])
+
+            self._first_init_complete = True
+
+            evaluate_initial = True
+
+            if evaluate_initial:
+                self.logger.info("[Epoch 0] Evaluating initial model before simulation")
+                initial_metrics = self.evaluate_initial_model(
+                    show_progress=False,
+                    save_dir=results_path,
+                )
+                self.logger.info(f"[Epoch 0] Initial metrics: {initial_metrics}")
+
+        else:
+            try:
+                if self.model_name_recbole in DEBIAS_DATASET_MODELS:
+                    self.recbole_dataset = DebiasDataset(self.model_config)
+                else:
+                    self.recbole_dataset = create_dataset(self.model_config)
+
+                if self.model_name_recbole in SPECIAL_DATA_PREPARATION:
+                    self.train_data, self.valid_data, self.test_data = (
+                        debias_data_preparation(
+                            config=self.model_config,
+                            dataset=self.recbole_dataset,
+                        )
+                    )
+                else:
+                    self.train_data, self.valid_data, self.test_data = (
+                        data_preparation(
+                            config=self.model_config,
+                            dataset=self.recbole_dataset,
+                        )
+                    )
+
+                self.logger.info(self.train_data)
+
+            except Exception as e:
+                print(traceback.format_exc())
+                raise Exception(
+                    f"Error during the initialization of the dataset -> {e}"
+                )
+
+            if warm_start and hasattr(self, "recbole_model"):
+                old_n_users = self.recbole_model.n_users
+                old_n_items = self.recbole_model.n_items
+                new_n_users = self.train_data.dataset.user_num
+                new_n_items = self.train_data.dataset.item_num
+
+                if new_n_users > old_n_users or new_n_items > old_n_items:
+                    self.logger.warning(
+                        f"[Warm Start] Vocabulary expanded: "
+                        f"users {old_n_users}→{new_n_users}, "
+                        f"items {old_n_items}→{new_n_items}"
+                    )
+
+                    model_cls = self.model_config.model_class
+
+                    self.recbole_model = model_cls(
+                        self.model_config,
+                        self.train_data.dataset,
+                    ).to(self.model_config["device"])
+            else:
+                model_cls = self.model_config.model_class
+
+                self.recbole_model = model_cls(
+                    self.model_config,
+                    self.train_data.dataset,
+                ).to(self.model_config["device"])
+
     def tuning_hyperparameters(self) -> None:
         hyper_file = f"tuning_parameters/{self.model_name_config}.hyper"
         export_result_file = f"tuning_parameters/{self.model_name_config}.result"
+
         if self.model_name_config in ["Collective Random", "Collective Popularity"]:
             return None
+
         if os.path.exists(export_result_file):
             print(f"\n Tuning of the model {self.model_name_config} already in the folder. Skip \n")
             return None
-        
-        def _objective_function(params_dict=None, config_file_list=None):
-            # Custom models that need special handling
-            # UserKNN does not exists within the library
-            CUSTOM_MODELS = {"UserKNN"}
-            custom_model_map = {
-                "UserKNN": UserKNN
-            }
-            
-            is_custom = self.model_name_recbole in CUSTOM_MODELS
-            
-            # Use dummy model name for custom models to pass Config validation
-            config_model_name = "Pop" if is_custom else self.model_name_recbole
-            
-            config = Config(
-                model=config_model_name,
-                dataset='experiment_dataset', 
-                config_file_list=config_file_list,
-                config_dict={**self.parameter_dict, **(params_dict or {})}
-            )
-            
-            # Override with actual model name for custom models
-            if is_custom:
-                config["model"] = self.model_name_recbole
-            
-            dataset = create_dataset(config)
-            train_data, valid_data, test_data = data_preparation(config=config, dataset=dataset)
-            
-            # Use custom model class if needed
-            if is_custom:
-                model_cls = custom_model_map[self.model_name_recbole]
-            else:
-                model_cls = get_model(config["model"])
-            
-            model = model_cls(config, train_data.dataset).to(config['device'])
-            trainer = Trainer(config, model)
-            best_valid_score, best_valid_result = trainer.fit(train_data, valid_data, verbose=False)
-            test_result = trainer.evaluate(test_data)
-            
-            return {
-                'model': self.model_name_config,
-                'best_valid_score': best_valid_score,
-                'valid_score_bigger': config['valid_metric_bigger'],
-                'best_valid_result': best_valid_result,
-                'test_result': test_result
-            }
-                
+
         if not os.path.exists(hyper_file):
-            raise Exception(f"Cannot find the hyper file for model {self.model_name_config} -> {hyper_file}")
-        
-        hp = HyperTuning(objective_function=_objective_function, algo='exhaustive', max_evals=100, 
-                        params_file=hyper_file, params_dict=self.parameter_dict)
+            raise Exception(
+                f"Cannot find the hyper file for model {self.model_name_config} -> {hyper_file}"
+            )
+
+        def _objective_function(params_dict=None, config_file_list=None):
+            tuning_parameter_dict = dict(self.parameter_dict)
+
+            if params_dict:
+                tuning_parameter_dict.update(params_dict)
+
+            if self.model_name_recbole == "MF_IPS":
+                tuning_parameter_dict["train_neg_sample_args"] = None
+                tuning_parameter_dict.setdefault("embedding_size", 64)
+                tuning_parameter_dict.setdefault("eta", 1)
+                tuning_parameter_dict.setdefault("pscore_method", "item")
+
+            if self.use_custom_model:
+                model_for_config = custom_model_map[self.model_name_recbole]
+            else:
+                model_for_config = self.model_name_recbole
+
+            model_config = Config(
+                model=model_for_config,
+                dataset="experiment_dataset",
+                config_file_list=config_file_list,
+                config_dict=tuning_parameter_dict,
+            )
+
+            init_seed(
+                model_config["seed"],
+                model_config["reproducibility"],
+            )
+
+            if self.model_name_recbole == "MF_IPS":
+                dataset = DebiasDataset(model_config)
+            else:
+                dataset = create_dataset(model_config)
+
+            train_data, valid_data, test_data = data_preparation(
+                config=model_config,
+                dataset=dataset,
+            )
+
+            model_cls = model_config.model_class
+
+            model = model_cls(
+                model_config,
+                train_data.dataset,
+            ).to(model_config["device"])
+
+            trainer = Trainer(model_config, model)
+
+            best_valid_score, best_valid_result = trainer.fit(
+                train_data,
+                valid_data,
+                verbose=False,
+            )
+
+            test_result = trainer.evaluate(test_data)
+
+            return {
+                "model": self.model_name_config,
+                "best_valid_score": best_valid_score,
+                "valid_score_bigger": model_config["valid_metric_bigger"],
+                "best_valid_result": best_valid_result,
+                "test_result": test_result,
+            }
+
+        hp = HyperTuning(
+            objective_function=_objective_function,
+            algo="exhaustive",
+            max_evals=100,
+            params_file=hyper_file,
+            params_dict=self.parameter_dict,
+        )
+
         hp.run()
         hp.export_result(output_file=export_result_file)
 
         self.parameter_dict.update(hp.best_params)
+
         return None
-    
-    @staticmethod
-    def _handle_cold_start_users(train_df, val_df, test_df):
-        '''
-        When split by time, a user can be in the val and/or test set but not in the training period.
-        Add the first val interaction within the training period
-        '''
-        train_min_ts = train_df["timestamp:float"].min()
-        train_max_ts = train_df["timestamp:float"].max()
-        train_users = set(train_df["user_id:token"].unique())
-        
-        # Check validation set
-        val_users = val_df["user_id:token"].unique()
-        val_cold_users = set(val_users) - train_users
-        if val_cold_users:
-            # Suppose the interactions are sorted
-            val_cold_mask = val_df["user_id:token"].isin(val_cold_users)
-            first_interactions = val_df[val_cold_mask].groupby("user_id:token", sort=False).head(1).copy()
-            np.random.seed(42)
-            new_timestamps = np.random.uniform(
-                train_min_ts, train_max_ts, size=len(first_interactions)
-            )
-            first_interactions["timestamp:float"] = new_timestamps
-            # UPDATE THE DATE COLUMN TOO
-            first_interactions["date"] = pd.to_datetime(new_timestamps, unit='s', utc=True).tz_convert("Europe/Rome").normalize()
-            
-            # Concatenate to training
-            train_df = pd.concat([train_df, first_interactions], ignore_index=True)
-            # Remove from validation using index
-            val_df = val_df.drop(first_interactions.index).reset_index(drop=True)
-        
-        # Check test set
-        train_users = set(train_df["user_id:token"].unique())
-        test_users = test_df["user_id:token"].unique()
-        test_cold_users = set(test_users) - train_users
-        if test_cold_users:
-            test_cold_mask = test_df["user_id:token"].isin(test_cold_users)
-            first_interactions = test_df[test_cold_mask].groupby("user_id:token", sort=False).head(1).copy()
-            new_timestamps = np.random.uniform(
-                train_min_ts, train_max_ts, size=len(first_interactions)
-            )
-            first_interactions["timestamp:float"] = new_timestamps
-            # UPDATE THE DATE COLUMN TOO
-            first_interactions["date"] = pd.to_datetime(new_timestamps, unit='s', utc=True).tz_convert("Europe/Rome").normalize()
-            
-            train_df = pd.concat([train_df, first_interactions], ignore_index=True)
-            test_df = test_df.drop(first_interactions.index).reset_index(drop=True)
-        
-        if val_cold_users or test_cold_users:
-            train_df = train_df.sort_values(["user_id:token", "timestamp:float"], ignore_index=True)
-        
-        return train_df, val_df, test_df
 
     def evaluate_initial_model(self, save_dir: str = None, show_progress: bool = False):
 
-        if not hasattr(self, 'recbole_model') or not hasattr(self, 'train_data'):
-            raise RuntimeError("Model must be initialized first. Call init_recbole_model(is_first_init=True)")
-        
-        # Set up save directory
+        if not hasattr(self, "recbole_model") or not hasattr(self, "train_data"):
+            raise RuntimeError(
+                "Model must be initialized first. Call init_recbole_model(is_first_init=True)"
+            )
+
         save_stem = os.path.join(save_dir, "epoch_0")
-        
-        # Create trainer
-        trainer = Trainer(self.model_config, self.recbole_model)
-        
+        if self.model_name_recbole == "DICE":
+            trainer = DICETrainer(self.model_config, self.recbole_model)
+        else:
+            trainer = Trainer(self.model_config, self.recbole_model)
+
         self.logger.info("[Epoch 0] Starting initial model training and evaluation")
+
         self._fit_with_tracking(
             trainer=trainer,
             save_stem=save_stem,
             show_progress=show_progress,
-            save_plots=False
+            save_plots=False,
         )
 
-        # Load the final test metrics that were saved
         metrics_file = f"{save_stem}_final_test_metrics.json"
+
         if os.path.exists(metrics_file):
-            with open(metrics_file, 'r') as f:
+            with open(metrics_file, "r") as f:
                 final_metrics = json.load(f)
-            self.logger.info(f"[Epoch 0] Initial evaluation complete. Metrics saved to {metrics_file}")
+
+            self.logger.info(
+                f"[Epoch 0] Initial evaluation complete. Metrics saved to {metrics_file}"
+            )
             return final_metrics
-        else:
-            self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
-            return None
+
+        self.logger.warning(f"[Epoch 0] Metrics file not found at {metrics_file}")
+        return None
     
     def _build_window_for_epoch(self, k: int = 0, new_interactions = None):
         # FIRST INITIALIZATION OF THE DATASET
@@ -1601,6 +2078,11 @@ class AmazonECommerceFeedbackLoop():
             else:
                 raise Exception("User and item feature dataframes not initialized!")
 
+    def _create_recbole_debias_dataset(self):
+        if self.model_name_recbole == "MF_IPS":
+            return DebiasDataset(self.model_config)
+        return create_dataset(self.model_config)
+
     def init_choice_model(self) -> None:
         df_init = self.dataset_unrolled_cold_start.copy()
 
@@ -1625,15 +2107,14 @@ class AmazonECommerceFeedbackLoop():
         return item_id_recbole
 
     def _fit_with_tracking(self, trainer: Trainer, save_stem: str, show_progress: bool = False, save_plots: bool = False):
+        
         all_validation_results = []
         all_test_results = []
         all_train_losses = []
 
-        # ---- store originals ----
         original_valid_epoch = trainer._valid_epoch
         original_train_epoch = trainer._train_epoch
 
-        # ---- wrappers ----
         def custom_train_epoch(train_data, epoch_idx, loss_func=None, show_progress=False):
             train_loss = original_train_epoch(train_data, epoch_idx, loss_func, show_progress)
             all_train_losses.append(train_loss)
@@ -1642,8 +2123,16 @@ class AmazonECommerceFeedbackLoop():
         def custom_valid_epoch(valid_data, show_progress=False):
             valid_result = original_valid_epoch(valid_data, show_progress)
             all_validation_results.append(valid_result)
-            # evaluate on test data every validation
-            test_result = trainer.evaluate(self.test_data, load_best_model=False, show_progress=False)
+
+            if self.model_name_recbole == "DICE":
+                all_test_results.append({})
+                return valid_result
+
+            try:
+                test_result = trainer.evaluate(self.test_data, load_best_model=False, show_progress=False)
+            except Exception:
+                test_result = {}
+
             all_test_results.append(test_result)
             return valid_result
 
@@ -1656,6 +2145,17 @@ class AmazonECommerceFeedbackLoop():
             show_progress=show_progress,
             saved=False
         )
+
+        if self.model_name_recbole == "DICE":
+            try:
+                final_test = trainer.evaluate(self.test_data, load_best_model=False, show_progress=show_progress)
+            except TypeError:
+                final_test = trainer.evaluate(self.test_data, show_progress=show_progress)
+
+            if all_test_results:
+                all_test_results[-1] = final_test
+            else:
+                all_test_results.append(final_test)
 
         data_for_df = []
         max_epochs = max(len(all_train_losses), len(all_validation_results), len(all_test_results))
@@ -1732,6 +2232,59 @@ class AmazonECommerceFeedbackLoop():
                 'user_id': torch.tensor([user_id_recbole])
             }
         )
+
+        if self.model_name_recbole == "AdaptiveDiversity":
+            with torch.no_grad():
+                try:
+                    item_scores = self.recbole_model.full_sort_predict(
+                        interaction_batch
+                    ).detach().cpu()
+
+                except Exception as e:
+                    traceback.print_exc()
+                    raise Exception(
+                        f"AdaptiveDiversity full_sort_predict failed: {e}"
+                    )
+
+            # RecBole models may return [n_items] or [1, n_items].
+            if item_scores.dim() == 2:
+                if item_scores.size(0) != 1:
+                    raise ValueError(
+                        f"Unexpected AdaptiveDiversity score shape: "
+                        f"{tuple(item_scores.shape)}"
+                    )
+
+                item_scores = item_scores.squeeze(0)
+
+            # We must have at least one admissible candidate.
+            if not torch.isfinite(item_scores).any():
+                raise ValueError(
+                    f"AdaptiveDiversity returned no finite/admissible item "
+                    f"for user {user_id_recbole}"
+                )
+
+
+            recbole_item_id = int(
+                torch.argmax(item_scores).item()
+            )
+
+            selected_score = float(
+                item_scores[recbole_item_id].item()
+            )
+
+            print(
+                f"selected item = {recbole_item_id}, "
+                f"score = {selected_score}"
+            )
+
+            if recbole_item_id == 0:
+                raise ValueError(
+                    "AdaptiveDiversity selected RecBole padding item 0. "
+                    "Check that full_sort_predict() masks item 0 with -inf."
+                )
+
+            return recbole_item_id
+
         with torch.no_grad():
             try:
                 SCORES_PATH = "./"
@@ -1867,6 +2420,134 @@ class AmazonECommerceFeedbackLoop():
 
                     use_recommender_mask = (self.rng.random(basket_size) < p)
 
+                    if self.model_name_recbole == "AdaptiveDiversity":
+                        for use_rec in use_recommender_mask:
+                            # Generate ONE interaction
+                            if use_rec:
+                                recbole_item_id = self.recom_recbole_model(
+                                    curr_epoch=epoch,
+                                    user_id_recbole=user_id_recbole,
+                                    K_horizon=k_horizon
+                                )
+                            else:
+                                if (
+                                    self.config.user_strategy["model_name"]
+                                    == "Custom choice model"
+                                ):
+                                    recbole_item_id = self.recom_choice_model(
+                                        curr_epoch=epoch,
+                                        user_id_recbole=user_id_recbole
+                                    )
+                                else:
+                                    raise Exception(
+                                        "Only choice model is supported"
+                                    )
+                            
+                            # RecBole ID -> original item token
+                            our_item_id = self.recbole_dataset.id2token(
+                                self.recbole_dataset.iid_field,
+                                recbole_item_id
+                            )
+                            def is_bad_item_id(x) -> bool:
+                                return (
+                                    isinstance(
+                                        x,
+                                        (
+                                            np.ndarray,
+                                            list,
+                                            dict,
+                                            set,
+                                            tuple
+                                        )
+                                    )
+                                    or x is None
+                                )
+
+                            if is_bad_item_id(our_item_id):
+                                print(
+                                    f"\nBad token item ID. "
+                                    f"Found: {recbole_item_id}"
+                                )
+                                continue
+
+                            # Record interaction normally
+                            single_interaction_df = {
+                                "user_id": user,
+                                "item_id": our_item_id,
+                                "date": date,
+                                "timestamp": recbole_timestamp,
+                            }
+                            epochs_interactions_df.append(
+                                single_interaction_df
+                            )
+                            
+                            # DEBUG
+                            before_q_user = self.recbole_model.user_prob[
+                                user_id_recbole,
+                                recbole_item_id
+                            ].item()
+
+                            before_q_global = self.recbole_model.global_prob[
+                                recbole_item_id
+                            ].item()
+
+                            before_h_user = self.recbole_model.user_entropy[
+                                user_id_recbole
+                            ].item()
+
+                            before_h_global = self.recbole_model.global_entropy.item()
+
+                            before_tau_user = self.recbole_model.user_threshold[
+                                user_id_recbole
+                            ].item()
+
+                            before_tau_global = self.recbole_model.global_threshold.item()
+
+                            # ---
+
+                            # immediately update entropy state
+                            self.recbole_model.update_diversity_state(
+                                user_id=user_id_recbole,
+                                item_id=recbole_item_id
+                            )
+
+                            # DEBUG
+
+                            after_q_user = self.recbole_model.user_prob[
+                                user_id_recbole,
+                                recbole_item_id
+                            ].item()
+
+                            after_q_global = self.recbole_model.global_prob[
+                                recbole_item_id
+                            ].item()
+
+                            after_h_user = self.recbole_model.user_entropy[
+                                user_id_recbole
+                            ].item()
+
+                            after_h_global = self.recbole_model.global_entropy.item()
+
+                            after_tau_user = self.recbole_model.user_threshold[
+                                user_id_recbole
+                            ].item()
+
+                            after_tau_global = self.recbole_model.global_threshold.item()
+
+                            print(
+                                f"[ONLINE UPDATE] user={user_id_recbole}, item={recbole_item_id}\n"
+                                f"q_user: {before_q_user:.6f} -> {after_q_user:.6f}\n"
+                                f"q_global: {before_q_global:.6f} -> {after_q_global:.6f}\n"
+                                f"H_user: {before_h_user:.6f} -> {after_h_user:.6f} "
+                                f"(delta={after_h_user-before_h_user:+.6f})\n"
+                                f"H_global: {before_h_global:.6f} -> {after_h_global:.6f} "
+                                f"(delta={after_h_global-before_h_global:+.6f})\n"
+                                f"tau_user: {before_tau_user:.6f} -> {after_tau_user:.6f}\n"
+                                f"tau_global: {before_tau_global:.6f} -> {after_tau_global:.6f}"
+                            )
+                            exit()
+                            # ---
+                        continue
                     n_recommender = np.sum(use_recommender_mask)
                     n_choice = basket_size - n_recommender
                     
@@ -1942,7 +2623,10 @@ class AmazonECommerceFeedbackLoop():
                 else:
                     print(f"\n Update - build window, init model finished in {(end_try - start_try)/60} minutes --- \n")
 
-                trainer = Trainer(self.model_config, self.recbole_model)
+                if self.model_name_recbole == "DICE":
+                    trainer = DICETrainer(self.model_config, self.recbole_model)
+                else:
+                    trainer = Trainer(self.model_config, self.recbole_model)
 
                 # where to save per-simulation-epoch training logs
                 trainlogs_root = os.path.join(results_path, "train_logs")

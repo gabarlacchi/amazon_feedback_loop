@@ -1,0 +1,13 @@
+model: DICE
+
+learning_rate loguniform -8,-1
+embedding_size choice [32, 64, 128]
+
+dis_loss choice ["L1", "L2"]
+dis_pen loguniform -8,-1
+
+int_weight loguniform -4,0
+pop_weight loguniform -4,0
+
+adaptive choice [True, False]
+decay choice [0.7, 0.8, 0.9, 0.95]

@@ -1,8 +1,0 @@
-model: xDeepFM
-
-learning_rate loguniform -8,-1
-embedding_size choice [8,16,32,64]
-mlp_hidden_size choice ['[64,64]','[128,128]','[128,128,128]','[256,128,64]']
-dropout_prob uniform 0.1,0.5
-reg_weight loguniform -6,-2
-

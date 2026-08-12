@@ -1,0 +1,5 @@
+model: MF_IPS
+
+learning_rate loguniform -8,-1 
+reg_weight loguniform -8,-1
+embedding_size choice [32, 64, 128]
